@@ -172,20 +172,17 @@ export default function RealEstateCalculator() {
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [transactionsHistory, setTransactionsHistory] = useState<TransactionDetailRecord[]>([]);
 
-  // Rapor & Grafik Seçenekleri State'leri
   const [chartType, setChartType] = useState<'bar' | 'area' | 'line'>('bar');
   const [selectedAgentFilter, setSelectedAgentFilter] = useState<string>('all');
   const [dateFilter, setDateFilter] = useState<'all' | 'this_month' | 'this_year' | 'custom'>('all');
   const [customStartDate, setCustomStartDate] = useState<string>('');
   const [customEndDate, setCustomEndDate] = useState<string>('');
 
-  // Düzenleme Modal State'leri
   const [editingContact, setEditingContact] = useState<Contact | null>(null);
   const [editingAgent, setEditingAgent] = useState<Agent | null>(null);
   const [editingExpenseType, setEditingExpenseType] = useState<ExpenseType | null>(null);
   const [contactSearchQuery, setContactSearchQuery] = useState<string>('');
 
-  // Arşivden Seçilen Detay Modal State'i
   const [selectedHistoryItem, setSelectedHistoryItem] = useState<TransactionDetailRecord | null>(null);
   const [selectedItemExpenses, setSelectedItemExpenses] = useState<any[]>([]);
 
@@ -195,14 +192,12 @@ export default function RealEstateCalculator() {
   const pdfRef = useRef<HTMLDivElement>(null);
   const modalPdfRef = useRef<HTMLDivElement>(null);
 
-  // Tanımlar Yeni Ekleme Form State'leri
   const [newAgentCode, setNewAgentCode] = useState('');
   const [newAgentName, setNewAgentName] = useState('');
   const [newAgentRate, setNewAgentRate] = useState<number>(50);
   const [newExpName, setNewExpName] = useState('');
   const [newExpCost, setNewExpCost] = useState<number>(0);
 
-  // Hesaplama Form State'leri
   const [transactionDate, setTransactionDate] = useState<string>(getTodayISODate());
   const [propertyPrice, setPropertyPrice] = useState<number>(1000000);
   const [transactionType, setTransactionType] = useState<string>('SATIŞ');
@@ -648,7 +643,6 @@ export default function RealEstateCalculator() {
   const selectedSellerAgent = agents.find(a => a.id === sellerAgentId);
   const selectedBuyerAgent = agents.find(a => a.id === buyerAgentId);
 
-  // SATICI HESAPLARI
   const sellerBaseComm = sellerCommType === 'percentage' 
     ? (propertyPrice * (sellerCommValue || 0)) / 100 
     : (sellerCommValue || 0);
@@ -670,7 +664,6 @@ export default function RealEstateCalculator() {
   const sellerAgentNet = Math.max(0, sellerAgentGross - sellerPartnerAmount - sellerTotalExpenseAmount - sellerTaxDeduction);
   const sellerOfficeNet = Math.max(0, sellerBaseComm - sellerAgentGross);
 
-  // ALICI HESAPLARI
   const buyerBaseComm = buyerCommType === 'percentage' 
     ? (propertyPrice * (buyerCommValue || 0)) / 100 
     : (buyerCommValue || 0);
@@ -692,7 +685,6 @@ export default function RealEstateCalculator() {
   const buyerAgentNet = Math.max(0, buyerAgentGross - buyerPartnerAmount - buyerTotalExpenseAmount - buyerTaxDeduction);
   const buyerOfficeNet = Math.max(0, buyerBaseComm - buyerAgentGross);
 
-  // GENEL TOPLAMLAR
   const totalGrossCollection = sellerTotalGross + buyerTotalGross;
   const totalAgentEarnings = sellerAgentNet + buyerAgentNet;
   const totalPartnerShares = sellerPartnerAmount + buyerPartnerAmount;
@@ -731,7 +723,6 @@ export default function RealEstateCalculator() {
   const saveTransaction = async () => {
     setIsSaving(true);
     try {
-      // Seçilen tarihi ISO formatına dönüştür
       const chosenTimestamp = new Date(transactionDate + 'T12:00:00Z').toISOString();
 
       const { data: trans, error: transError } = await supabase.from('transactions').insert({
@@ -792,7 +783,11 @@ export default function RealEstateCalculator() {
       if (buyerPartnerName) contactsToSync.push({ full_name: buyerPartnerName, contact_type: 'ORTAK' });
 
       for (const c of contactsToSync) {
-        await supabase.from('contacts').insert(c).select().single().catch(() => {});
+        try {
+          await supabase.from('contacts').insert(c);
+        } catch {
+          // Zaten varsa atla
+        }
       }
 
       const expensesToInsert = [
@@ -833,7 +828,6 @@ export default function RealEstateCalculator() {
 
   const activeFilteredAgentObj = agents.find(a => a.id === selectedAgentFilter);
 
-  // KİLİT EKRANI
   if (!isAuthenticated) {
     return (
       <div className="min-h-screen bg-slate-950 flex items-center justify-center p-4">
@@ -939,7 +933,7 @@ export default function RealEstateCalculator() {
           </div>
         </div>
 
-        {/* 1. SEKME: İŞLEM HESAPLAMA (TARİH SEÇİCİ EKLENDİ) */}
+        {/* 1. SEKME: İŞLEM HESAPLAMA */}
         {activeTab === 'calculator' && (
           <div className="space-y-6">
             <div className="flex justify-end gap-3">
@@ -968,11 +962,8 @@ export default function RealEstateCalculator() {
               </div>
             )}
 
-            {/* Ana Parametreler & Tarih Seçici */}
             <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
-                
-                {/* 1. İşlem Tarihi */}
                 <div>
                   <label className="block text-xs font-bold uppercase tracking-wider text-slate-500 mb-2 flex items-center gap-1.5">
                     <Calendar className="w-3.5 h-3.5 text-amber-600" />
@@ -986,7 +977,6 @@ export default function RealEstateCalculator() {
                   />
                 </div>
 
-                {/* 2. İşlem Türü */}
                 <div>
                   <label className="block text-xs font-bold uppercase tracking-wider text-slate-500 mb-2">İşlem Türü</label>
                   <select 
@@ -999,7 +989,6 @@ export default function RealEstateCalculator() {
                   </select>
                 </div>
 
-                {/* 3. Fiyat */}
                 <div>
                   <label className="block text-xs font-bold uppercase tracking-wider text-slate-500 mb-2">
                     {transactionType === 'SATIŞ' ? 'Gayrimenkul Satış Bedeli' : 'Aylık Kira Bedeli'}
@@ -1016,7 +1005,6 @@ export default function RealEstateCalculator() {
                   </div>
                 </div>
 
-                {/* 4. KDV */}
                 <div>
                   <label className="block text-xs font-bold uppercase tracking-wider text-slate-500 mb-2">KDV Oranı (%)</label>
                   <div className="relative">
@@ -1030,7 +1018,6 @@ export default function RealEstateCalculator() {
                     <span className="absolute right-4 top-3.5 text-amber-600 font-bold text-sm">%</span>
                   </div>
                 </div>
-
               </div>
             </div>
 
@@ -2045,7 +2032,7 @@ export default function RealEstateCalculator() {
                           cx="50%"
                           cy="50%"
                           outerRadius={75}
-                          label={({ name, percent }) => `${name} (%${(percent * 100).toFixed(0)})`}
+                          label={({ name, percent }: { name?: string; percent?: number }) => `${name ?? ''} (%${((percent ?? 0) * 100).toFixed(0)})`}
                           fontSize={10}
                         >
                           {analyticsSummary.pieData.map((_, index) => (
@@ -2645,7 +2632,7 @@ export default function RealEstateCalculator() {
           </div>
         )}
 
-        {/* GEÇMİŞ İŞLEM DETAY MODAL (İŞLEM TARİHİ EKLENDİ) */}
+        {/* GEÇMİŞ İŞLEM DETAY MODAL */}
         {selectedHistoryItem && (
           <div className="fixed inset-0 bg-slate-950/70 backdrop-blur-sm z-50 flex items-center justify-center p-4 overflow-y-auto">
             <div className="bg-white rounded-3xl shadow-2xl border border-slate-300 max-w-4xl w-full max-h-[90vh] flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-200">
