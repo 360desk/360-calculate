@@ -35,7 +35,12 @@ import {
   ToggleRight,
   Lock,
   LogOut,
-  KeyRound
+  KeyRound,
+  Target,
+  Sparkles,
+  Check,
+  Clock,
+  Briefcase
 } from 'lucide-react';
 import jsPDF from 'jspdf';
 import html2canvas from 'html2canvas';
@@ -53,7 +58,8 @@ import {
   Area,
   LineChart,
   Line,
-  CartesianGrid
+  CartesianGrid,
+  Legend
 } from 'recharts';
 
 interface Agent {
@@ -61,6 +67,7 @@ interface Agent {
   code: string;
   full_name: string;
   commission_rate: number;
+  office_name?: string;
   is_active?: boolean;
 }
 
@@ -87,6 +94,32 @@ interface Contact {
   notes?: string;
 }
 
+interface TargetTemplate {
+  id: string;
+  title: string;
+  target_type: 'SATIŞ' | 'KİRALAMA';
+  period_type: 'AYLIK' | '3_AYLIK';
+  target_count: number;
+  reward_type: 'PERCENT' | 'FIXED';
+  reward_value: number;
+}
+
+interface AgentTarget {
+  id: string;
+  created_at: string;
+  agent_id: string;
+  title: string;
+  target_type: 'SATIŞ' | 'KİRALAMA';
+  period_type: 'AYLIK' | '3_AYLIK';
+  start_date: string;
+  end_date: string;
+  target_count: number;
+  reward_type: 'PERCENT' | 'FIXED';
+  reward_value: number;
+  is_paid: boolean;
+  paid_at?: string;
+}
+
 interface TransactionDetailRecord {
   id: string;
   created_at: string;
@@ -95,11 +128,13 @@ interface TransactionDetailRecord {
   tax_rate: number;
 
   seller_name: string;
+  seller_parties?: string[];
   seller_agent_id: string;
   seller_commission_type: string;
   seller_commission_value: number;
   seller_base_commission: number;
   seller_invoice_type: string;
+  seller_invoice_tax_included?: boolean;
   seller_invoice_amount: number;
   seller_tax_amount: number;
   seller_tax_deduction?: number;
@@ -115,11 +150,13 @@ interface TransactionDetailRecord {
   seller_office_net_share: number;
 
   buyer_name: string;
+  buyer_parties?: string[];
   buyer_agent_id: string;
   buyer_commission_type: string;
   buyer_commission_value: number;
   buyer_base_commission: number;
   buyer_invoice_type: string;
+  buyer_invoice_tax_included?: boolean;
   buyer_invoice_amount: number;
   buyer_tax_amount: number;
   buyer_tax_deduction?: number;
@@ -140,7 +177,7 @@ interface TransactionDetailRecord {
 
 const formatMoney = (val: number) => {
   if (isNaN(val) || val === null || val === undefined) return '0 TL';
-  return `${val.toLocaleString('tr-TR')} TL`;
+  return `${Math.round(val).toLocaleString('tr-TR')} TL`;
 };
 
 const formatInputDisplay = (val: number) => {
@@ -158,6 +195,7 @@ const getTodayISODate = () => {
 };
 
 const PIE_COLORS = ['#d97706', '#10b981', '#3b82f6', '#8b5cf6'];
+const TOP3_COLORS = ['#f59e0b', '#3b82f6', '#10b981'];
 const MASTER_PASSWORD = 't74B78s03##';
 
 export default function RealEstateCalculator() {
@@ -165,19 +203,24 @@ export default function RealEstateCalculator() {
   const [passwordInput, setPasswordInput] = useState<string>('');
   const [authError, setAuthError] = useState<string>('');
 
-  const [activeTab, setActiveTab] = useState<'calculator' | 'settings' | 'history' | 'analytics' | 'contacts'>('calculator');
+  const [activeTab, setActiveTab] = useState<'calculator' | 'settings' | 'history' | 'analytics' | 'contacts' | 'targets'>('calculator');
   const [taxRate, setTaxRate] = useState<number>(20);
   const [agents, setAgents] = useState<Agent[]>([]);
   const [expenseTypes, setExpenseTypes] = useState<ExpenseType[]>([]);
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [transactionsHistory, setTransactionsHistory] = useState<TransactionDetailRecord[]>([]);
+  const [targetTemplates, setTargetTemplates] = useState<TargetTemplate[]>([]);
+  const [agentTargets, setAgentTargets] = useState<AgentTarget[]>([]);
 
+  // Filtreler
   const [chartType, setChartType] = useState<'bar' | 'area' | 'line'>('bar');
   const [selectedAgentFilter, setSelectedAgentFilter] = useState<string>('all');
+  const [selectedOfficeFilter, setSelectedOfficeFilter] = useState<string>('all');
   const [dateFilter, setDateFilter] = useState<'all' | 'this_month' | 'this_year' | 'custom'>('all');
   const [customStartDate, setCustomStartDate] = useState<string>('');
   const [customEndDate, setCustomEndDate] = useState<string>('');
 
+  // Düzenleme modalları
   const [editingContact, setEditingContact] = useState<Contact | null>(null);
   const [editingAgent, setEditingAgent] = useState<Agent | null>(null);
   const [editingExpenseType, setEditingExpenseType] = useState<ExpenseType | null>(null);
@@ -192,22 +235,29 @@ export default function RealEstateCalculator() {
   const pdfRef = useRef<HTMLDivElement>(null);
   const modalPdfRef = useRef<HTMLDivElement>(null);
 
+  // Yeni Tanımlar State'leri
   const [newAgentCode, setNewAgentCode] = useState('');
   const [newAgentName, setNewAgentName] = useState('');
   const [newAgentRate, setNewAgentRate] = useState<number>(50);
+  const [newAgentOffice, setNewAgentOffice] = useState('Merkez Ofis');
   const [newExpName, setNewExpName] = useState('');
   const [newExpCost, setNewExpCost] = useState<number>(0);
 
+  // İşlem State'leri
   const [transactionDate, setTransactionDate] = useState<string>(getTodayISODate());
   const [propertyPrice, setPropertyPrice] = useState<number>(1000000);
   const [transactionType, setTransactionType] = useState<string>('SATIŞ');
 
+  // Satıcı / Kiraya Veren State'leri
   const [sellerInputMode, setSellerInputMode] = useState<'select' | 'new'>('select');
   const [sellerName, setSellerName] = useState<string>('');
+  const [sellerParties, setSellerParties] = useState<string[]>([]);
+  const [newSellerPartyInput, setNewSellerPartyInput] = useState<string>('');
   const [sellerAgentId, setSellerAgentId] = useState<string>('');
   const [sellerCommType, setSellerCommType] = useState<'percentage' | 'fixed'>('percentage');
   const [sellerCommValue, setSellerCommValue] = useState<number>(2);
   const [sellerInvoiceType, setSellerInvoiceType] = useState<'unbilled' | 'full' | 'partial'>('unbilled');
+  const [sellerInvoiceTaxIncluded, setSellerInvoiceTaxIncluded] = useState<boolean>(false);
   const [sellerInvoiceAmount, setSellerInvoiceAmount] = useState<number>(0);
   const [sellerHasPartner, setSellerHasPartner] = useState<boolean>(false);
   const [sellerPartnerMode, setSellerPartnerMode] = useState<'select' | 'new'>('select');
@@ -216,12 +266,16 @@ export default function RealEstateCalculator() {
   const [sellerPartnerShare, setSellerPartnerShare] = useState<number>(0);
   const [sellerExpenses, setSellerExpenses] = useState<ExpenseItem[]>([]);
 
+  // Alıcı / Kiralayan State'leri
   const [buyerInputMode, setBuyerInputMode] = useState<'select' | 'new'>('select');
   const [buyerName, setBuyerName] = useState<string>('');
+  const [buyerParties, setBuyerParties] = useState<string[]>([]);
+  const [newBuyerPartyInput, setNewBuyerPartyInput] = useState<string>('');
   const [buyerAgentId, setBuyerAgentId] = useState<string>('');
   const [buyerCommType, setBuyerCommType] = useState<'percentage' | 'fixed'>('percentage');
   const [buyerCommValue, setBuyerCommValue] = useState<number>(2);
   const [buyerInvoiceType, setBuyerInvoiceType] = useState<'unbilled' | 'full' | 'partial'>('unbilled');
+  const [buyerInvoiceTaxIncluded, setBuyerInvoiceTaxIncluded] = useState<boolean>(false);
   const [buyerInvoiceAmount, setBuyerInvoiceAmount] = useState<number>(0);
   const [buyerHasPartner, setBuyerHasPartner] = useState<boolean>(false);
   const [buyerPartnerMode, setBuyerPartnerMode] = useState<'select' | 'new'>('select');
@@ -229,6 +283,26 @@ export default function RealEstateCalculator() {
   const [buyerPartnerReason, setBuyerPartnerReason] = useState<string>('');
   const [buyerPartnerShare, setBuyerPartnerShare] = useState<number>(0);
   const [buyerExpenses, setBuyerExpenses] = useState<ExpenseItem[]>([]);
+
+  // Hedef Modülü State'leri
+  const [selectedTemplateId, setSelectedTemplateId] = useState<string>('');
+  const [targetAgentId, setTargetAgentId] = useState<string>('');
+  const [targetTitle, setTargetTitle] = useState<string>('');
+  const [targetType, setTargetType] = useState<'SATIŞ' | 'KİRALAMA'>('SATIŞ');
+  const [targetPeriod, setTargetPeriod] = useState<'AYLIK' | '3_AYLIK'>('AYLIK');
+  const [targetStartDate, setTargetStartDate] = useState<string>(getTodayISODate());
+  const [targetEndDate, setTargetEndDate] = useState<string>(getTodayISODate());
+  const [targetCount, setTargetCount] = useState<number>(3);
+  const [targetRewardType, setTargetRewardType] = useState<'PERCENT' | 'FIXED'>('PERCENT');
+  const [targetRewardValue, setTargetRewardValue] = useState<number>(5);
+
+  // Yeni Şablon Tanımlama
+  const [newTplTitle, setNewTplTitle] = useState<string>('');
+  const [newTplType, setNewTplType] = useState<'SATIŞ' | 'KİRALAMA'>('SATIŞ');
+  const [newTplPeriod, setNewTplPeriod] = useState<'AYLIK' | '3_AYLIK'>('AYLIK');
+  const [newTplCount, setNewTplCount] = useState<number>(3);
+  const [newTplRewardType, setNewTplRewardType] = useState<'PERCENT' | 'FIXED'>('PERCENT');
+  const [newTplRewardValue, setNewTplRewardValue] = useState<number>(5);
 
   useEffect(() => {
     const sessionAuth = localStorage.getItem('360ic_auth_token');
@@ -268,9 +342,13 @@ export default function RealEstateCalculator() {
     if (contactsData) setContacts(contactsData as Contact[]);
 
     const { data: transData } = await supabase.from('transactions').select('*').order('created_at', { ascending: false });
-    if (transData) {
-      setTransactionsHistory(transData as TransactionDetailRecord[]);
-    }
+    if (transData) setTransactionsHistory(transData as TransactionDetailRecord[]);
+
+    const { data: tplData } = await supabase.from('target_templates').select('*').order('created_at', { ascending: false });
+    if (tplData) setTargetTemplates(tplData as TargetTemplate[]);
+
+    const { data: tgData } = await supabase.from('agent_targets').select('*').order('created_at', { ascending: false });
+    if (tgData) setAgentTargets(tgData as AgentTarget[]);
   };
 
   useEffect(() => {
@@ -283,320 +361,146 @@ export default function RealEstateCalculator() {
     return agents.filter(a => a.is_active !== false);
   }, [agents]);
 
-  const filteredTransactions = useMemo(() => {
-    return transactionsHistory.filter(t => {
-      const transDate = new Date(t.created_at);
-      const now = new Date();
+  const officeList = useMemo(() => {
+    const list = Array.from(new Set(agents.map(a => a.office_name || 'Merkez Ofis').filter(Boolean)));
+    return list.length > 0 ? list : ['Merkez Ofis'];
+  }, [agents]);
 
-      if (dateFilter === 'this_month') {
-        if (transDate.getMonth() !== now.getMonth() || transDate.getFullYear() !== now.getFullYear()) return false;
-      } else if (dateFilter === 'this_year') {
-        if (transDate.getFullYear() !== now.getFullYear()) return false;
-      } else if (dateFilter === 'custom') {
-        if (customStartDate && new Date(t.created_at) < new Date(customStartDate)) return false;
-        if (customEndDate && new Date(t.created_at) > new Date(customEndDate + 'T23:59:59')) return false;
-      }
+  // Dinamik Terimler
+  const isRent = transactionType === 'KİRALAMA';
+  const sellerTitle = isRent ? 'Kiraya Veren' : 'Satıcı Tarafı';
+  const buyerTitle = isRent ? 'Kiralayan / Kiracı' : 'Alıcı Tarafı';
 
-      if (selectedAgentFilter !== 'all') {
-        const isSellerAgent = t.seller_agent_id === selectedAgentFilter;
-        const isBuyerAgent = t.buyer_agent_id === selectedAgentFilter;
-        if (!isSellerAgent && !isBuyerAgent) return false;
-      }
-
-      return true;
+  // Çoklu Müşteri Yönetimi
+  const allSellerNames = useMemo(() => {
+    const list: string[] = [];
+    if (sellerName.trim()) list.push(sellerName.trim());
+    sellerParties.forEach(p => {
+      if (p.trim() && !list.includes(p.trim())) list.push(p.trim());
     });
-  }, [transactionsHistory, dateFilter, customStartDate, customEndDate, selectedAgentFilter]);
+    return list;
+  }, [sellerName, sellerParties]);
 
-  const analyticsSummary = useMemo(() => {
-    let totalSalesCount = 0;
-    let totalRentCount = 0;
-    let totalGrossVolume = 0;
-    let totalOfficeNet = 0;
-    let totalAgentNetEarnings = 0;
-
-    const agentStats: Record<string, { id: string; name: string; count: number; gross: number; agentNet: number; officeNet: number }> = {};
-    const contactVolumeStats: Record<string, { count: number; totalGross: number; role: string }> = {};
-
-    filteredTransactions.forEach(t => {
-      if (t.transaction_type === 'SATIŞ') totalSalesCount++;
-      else totalRentCount++;
-
-      if (t.seller_agent_id) {
-        const ag = agents.find(a => a.id === t.seller_agent_id);
-        const name = ag ? `[${ag.code}] ${ag.full_name}` : 'Bilinmeyen Danışman';
-        if (!agentStats[t.seller_agent_id]) agentStats[t.seller_agent_id] = { id: t.seller_agent_id, name, count: 0, gross: 0, agentNet: 0, officeNet: 0 };
-        agentStats[t.seller_agent_id].count += 1;
-        agentStats[t.seller_agent_id].gross += Number(t.seller_base_commission) || 0;
-        agentStats[t.seller_agent_id].agentNet += Number(t.seller_agent_net_earning) || 0;
-        agentStats[t.seller_agent_id].officeNet += Number(t.seller_office_net_share) || 0;
-
-        if (selectedAgentFilter === t.seller_agent_id) {
-          totalAgentNetEarnings += Number(t.seller_agent_net_earning) || 0;
-        }
-      }
-
-      if (t.buyer_agent_id) {
-        const ag = agents.find(a => a.id === t.buyer_agent_id);
-        const name = ag ? `[${ag.code}] ${ag.full_name}` : 'Bilinmeyen Danışman';
-        if (!agentStats[t.buyer_agent_id]) agentStats[t.buyer_agent_id] = { id: t.buyer_agent_id, name, count: 0, gross: 0, agentNet: 0, officeNet: 0 };
-        agentStats[t.buyer_agent_id].count += 1;
-        agentStats[t.buyer_agent_id].gross += Number(t.buyer_base_commission) || 0;
-        agentStats[t.buyer_agent_id].agentNet += Number(t.buyer_agent_net_earning) || 0;
-        agentStats[t.buyer_agent_id].officeNet += Number(t.buyer_office_net_share) || 0;
-
-        if (selectedAgentFilter === t.buyer_agent_id) {
-          totalAgentNetEarnings += Number(t.buyer_agent_net_earning) || 0;
-        }
-      }
-
-      if (selectedAgentFilter === 'all') {
-        totalGrossVolume += Number(t.total_transaction_gross) || 0;
-        totalOfficeNet += Number(t.total_office_net_income) || 0;
-      } else {
-        if (t.seller_agent_id === selectedAgentFilter) {
-          totalGrossVolume += Number(t.seller_total_gross_income) || 0;
-          totalOfficeNet += Number(t.seller_office_net_share) || 0;
-        }
-        if (t.buyer_agent_id === selectedAgentFilter) {
-          totalGrossVolume += Number(t.buyer_total_gross_income) || 0;
-          totalOfficeNet += Number(t.buyer_office_net_share) || 0;
-        }
-      }
-
-      if (t.seller_name && t.seller_name !== 'Belirtilmedi') {
-        if (!contactVolumeStats[t.seller_name]) contactVolumeStats[t.seller_name] = { count: 0, totalGross: 0, role: 'Müşteri (Satıcı)' };
-        contactVolumeStats[t.seller_name].count += 1;
-        contactVolumeStats[t.seller_name].totalGross += Number(t.property_price) || 0;
-      }
-      if (t.buyer_name && t.buyer_name !== 'Belirtilmedi') {
-        if (!contactVolumeStats[t.buyer_name]) contactVolumeStats[t.buyer_name] = { count: 0, totalGross: 0, role: 'Müşteri (Alıcı)' };
-        contactVolumeStats[t.buyer_name].count += 1;
-        contactVolumeStats[t.buyer_name].totalGross += Number(t.property_price) || 0;
-      }
-      if (t.seller_partner_name) {
-        if (!contactVolumeStats[t.seller_partner_name]) contactVolumeStats[t.seller_partner_name] = { count: 0, totalGross: 0, role: 'Ortak Çalışma' };
-        contactVolumeStats[t.seller_partner_name].count += 1;
-        contactVolumeStats[t.seller_partner_name].totalGross += Number(t.seller_partner_share) || 0;
-      }
+  const allBuyerNames = useMemo(() => {
+    const list: string[] = [];
+    if (buyerName.trim()) list.push(buyerName.trim());
+    buyerParties.forEach(p => {
+      if (p.trim() && !list.includes(p.trim())) list.push(p.trim());
     });
+    return list;
+  }, [buyerName, buyerParties]);
 
-    const topAgentsByCount = Object.values(agentStats).sort((a, b) => b.count - a.count);
-    const topContactsByVolume = Object.entries(contactVolumeStats)
-      .map(([name, data]) => ({ name, ...data }))
-      .sort((a, b) => b.totalGross - a.totalGross);
-
-    const timelineDataMap: Record<string, { dateLabel: string; gross: number; net: number; agentEarn: number }> = {};
-    
-    filteredTransactions.forEach(t => {
-      const date = new Date(t.created_at);
-      const key = `${date.getFullYear()}-${(date.getMonth() + 1).toString().padStart(2, '0')}`;
-      if (!timelineDataMap[key]) {
-        timelineDataMap[key] = {
-          dateLabel: date.toLocaleDateString('tr-TR', { month: 'short', year: '2-digit' }),
-          gross: 0,
-          net: 0,
-          agentEarn: 0
-        };
-      }
-
-      if (selectedAgentFilter === 'all') {
-        timelineDataMap[key].gross += Number(t.total_transaction_gross) || 0;
-        timelineDataMap[key].net += Number(t.total_office_net_income) || 0;
-      } else {
-        if (t.seller_agent_id === selectedAgentFilter) {
-          timelineDataMap[key].gross += Number(t.seller_total_gross_income) || 0;
-          timelineDataMap[key].net += Number(t.seller_office_net_share) || 0;
-          timelineDataMap[key].agentEarn += Number(t.seller_agent_net_earning) || 0;
-        }
-        if (t.buyer_agent_id === selectedAgentFilter) {
-          timelineDataMap[key].gross += Number(t.buyer_total_gross_income) || 0;
-          timelineDataMap[key].net += Number(t.buyer_office_net_share) || 0;
-          timelineDataMap[key].agentEarn += Number(t.buyer_agent_net_earning) || 0;
-        }
-      }
-    });
-
-    const chartTimelineData = Object.values(timelineDataMap).reverse();
-
-    const pieData = [
-      { name: 'Satış İşlemleri', value: totalSalesCount },
-      { name: 'Kiralama İşlemleri', value: totalRentCount }
-    ];
-
-    return {
-      totalTransactions: filteredTransactions.length,
-      totalSalesCount,
-      totalRentCount,
-      totalGrossVolume,
-      totalOfficeNet,
-      totalAgentNetEarnings,
-      topAgentsByCount,
-      topContactsByVolume,
-      chartTimelineData,
-      pieData
-    };
-  }, [filteredTransactions, agents, selectedAgentFilter]);
-
-  const handleDeleteTransaction = async (id: string) => {
-    if (!confirm('Bu işlemi tamamen silmek istediğinize emin misiniz? (Bağlı tüm masraflar ve rapor verileri temizlenecektir)')) return;
-    
-    await supabase.from('transaction_expenses').delete().eq('transaction_id', id);
-    const { error } = await supabase.from('transactions').delete().eq('id', id);
-    
-    if (!error) {
-      if (selectedHistoryItem?.id === id) {
-        setSelectedHistoryItem(null);
-      }
-      loadData();
-    } else {
-      alert('İşlem silinirken hata oluştu: ' + error.message);
+  const addSellerParty = (name: string) => {
+    if (!name.trim()) return;
+    if (!sellerParties.includes(name.trim()) && name.trim() !== sellerName) {
+      setSellerParties([...sellerParties, name.trim()]);
     }
+    setNewSellerPartyInput('');
   };
 
-  const handleAddAgent = async () => {
-    if (!newAgentCode || !newAgentName) return alert('Lütfen danışman kodu ve adını girin.');
-    const { error } = await supabase.from('agents').insert({
-      code: newAgentCode,
-      full_name: newAgentName,
-      commission_rate: newAgentRate,
-      is_active: true
-    });
-    if (!error) {
-      setNewAgentCode('');
-      setNewAgentName('');
-      loadData();
-    } else {
-      alert('Hata: ' + error.message);
+  const removeSellerParty = (index: number) => {
+    setSellerParties(sellerParties.filter((_, i) => i !== index));
+  };
+
+  const addBuyerParty = (name: string) => {
+    if (!name.trim()) return;
+    if (!buyerParties.includes(name.trim()) && name.trim() !== buyerName) {
+      setBuyerParties([...buyerParties, name.trim()]);
     }
+    setNewBuyerPartyInput('');
   };
 
-  const handleUpdateAgent = async () => {
-    if (!editingAgent) return;
-    const { error } = await supabase.from('agents').update({
-      code: editingAgent.code,
-      full_name: editingAgent.full_name,
-      commission_rate: editingAgent.commission_rate,
-      is_active: editingAgent.is_active
-    }).eq('id', editingAgent.id);
+  const removeBuyerParty = (index: number) => {
+    setBuyerParties(buyerParties.filter((_, i) => i !== index));
+  };
 
-    if (!error) {
-      setEditingAgent(null);
-      loadData();
+  // Komisyon & Fatura Hesaplamaları (KDV Dahil / Hariç Motoru)
+  const selectedSellerAgent = agents.find(a => a.id === sellerAgentId);
+  const selectedBuyerAgent = agents.find(a => a.id === buyerAgentId);
+
+  const sellerBaseComm = sellerCommType === 'percentage' 
+    ? (propertyPrice * (sellerCommValue || 0)) / 100 
+    : (sellerCommValue || 0);
+
+  // Satıcı Fatura Hesabı
+  let sellerNetInvoiceBase = 0;
+  let sellerTaxAmount = 0;
+
+  if (sellerInvoiceType === 'full') {
+    if (sellerInvoiceTaxIncluded) {
+      sellerNetInvoiceBase = sellerBaseComm / (1 + taxRate / 100);
+      sellerTaxAmount = sellerBaseComm - sellerNetInvoiceBase;
     } else {
-      alert('Danışman güncellenirken hata: ' + error.message);
+      sellerNetInvoiceBase = sellerBaseComm;
+      sellerTaxAmount = (sellerNetInvoiceBase * taxRate) / 100;
     }
-  };
-
-  const toggleAgentActiveStatus = async (agent: Agent) => {
-    const newStatus = !(agent.is_active !== false);
-    const { error } = await supabase.from('agents').update({ is_active: newStatus }).eq('id', agent.id);
-    if (!error) {
-      loadData();
+  } else if (sellerInvoiceType === 'partial') {
+    const rawVal = sellerInvoiceAmount || 0;
+    if (sellerInvoiceTaxIncluded) {
+      sellerNetInvoiceBase = rawVal / (1 + taxRate / 100);
+      sellerTaxAmount = rawVal - sellerNetInvoiceBase;
     } else {
-      alert('Durum güncellenirken hata: ' + error.message);
+      sellerNetInvoiceBase = rawVal;
+      sellerTaxAmount = (sellerNetInvoiceBase * taxRate) / 100;
     }
-  };
+  }
 
-  const handleDeleteAgent = async (id: string) => {
-    if (!confirm('Danışmanı tamamen silmek istediğinize emin misiniz? (Öneri: Geçmiş kayıtların korunması için danışmanı Pasife alabilirsiniz)')) return;
-    await supabase.from('agents').delete().eq('id', id);
-    loadData();
-  };
+  const sellerTotalGross = sellerBaseComm + (sellerInvoiceTaxIncluded ? 0 : sellerTaxAmount);
+  const sellerAgentRate = selectedSellerAgent ? selectedSellerAgent.commission_rate : 50;
+  const sellerAgentGross = (sellerBaseComm * sellerAgentRate) / 100;
+  const sellerTaxDeduction = (sellerNetInvoiceBase * 0.25 * sellerAgentRate) / 100;
+  const sellerTotalExpenseAmount = sellerExpenses.reduce((acc, curr) => acc + (Number(curr.amount) || 0), 0);
+  const sellerPartnerAmount = sellerHasPartner ? (Number(sellerPartnerShare) || 0) : 0;
+  const sellerAgentNet = Math.max(0, sellerAgentGross - sellerPartnerAmount - sellerTotalExpenseAmount - sellerTaxDeduction);
+  const sellerOfficeNet = Math.max(0, sellerBaseComm - sellerAgentGross);
 
-  const handleAddExpenseType = async () => {
-    if (!newExpName) return alert('Lütfen gider adını girin.');
-    const { error } = await supabase.from('expense_types').insert({
-      name: newExpName,
-      default_cost: newExpCost
-    });
-    if (!error) {
-      setNewExpName('');
-      setNewExpCost(0);
-      loadData();
+  // Alıcı Fatura Hesabı
+  const buyerBaseComm = buyerCommType === 'percentage' 
+    ? (propertyPrice * (buyerCommValue || 0)) / 100 
+    : (buyerCommValue || 0);
+
+  let buyerNetInvoiceBase = 0;
+  let buyerTaxAmount = 0;
+
+  if (buyerInvoiceType === 'full') {
+    if (buyerInvoiceTaxIncluded) {
+      buyerNetInvoiceBase = buyerBaseComm / (1 + taxRate / 100);
+      buyerTaxAmount = buyerBaseComm - buyerNetInvoiceBase;
     } else {
-      alert('Hata: ' + error.message);
+      buyerNetInvoiceBase = buyerBaseComm;
+      buyerTaxAmount = (buyerNetInvoiceBase * taxRate) / 100;
     }
-  };
-
-  const handleUpdateExpenseType = async () => {
-    if (!editingExpenseType) return;
-    const { error } = await supabase.from('expense_types').update({
-      name: editingExpenseType.name,
-      default_cost: editingExpenseType.default_cost
-    }).eq('id', editingExpenseType.id);
-
-    if (!error) {
-      setEditingExpenseType(null);
-      loadData();
+  } else if (buyerInvoiceType === 'partial') {
+    const rawVal = buyerInvoiceAmount || 0;
+    if (buyerInvoiceTaxIncluded) {
+      buyerNetInvoiceBase = rawVal / (1 + taxRate / 100);
+      buyerTaxAmount = rawVal - buyerNetInvoiceBase;
     } else {
-      alert('Gider türü güncellenirken hata: ' + error.message);
+      buyerNetInvoiceBase = rawVal;
+      buyerTaxAmount = (buyerNetInvoiceBase * taxRate) / 100;
     }
-  };
+  }
 
-  const handleDeleteExpenseType = async (id: string) => {
-    if (!confirm('Gider türünü silmek istediğinize emin misiniz?')) return;
-    await supabase.from('expense_types').delete().eq('id', id);
-    loadData();
-  };
+  const buyerTotalGross = buyerBaseComm + (buyerInvoiceTaxIncluded ? 0 : buyerTaxAmount);
+  const buyerAgentRate = selectedBuyerAgent ? selectedBuyerAgent.commission_rate : 50;
+  const buyerAgentGross = (buyerBaseComm * buyerAgentRate) / 100;
+  const buyerTaxDeduction = (buyerNetInvoiceBase * 0.25 * buyerAgentRate) / 100;
+  const buyerTotalExpenseAmount = buyerExpenses.reduce((acc, curr) => acc + (Number(curr.amount) || 0), 0);
+  const buyerPartnerAmount = buyerHasPartner ? (Number(buyerPartnerShare) || 0) : 0;
+  const buyerAgentNet = Math.max(0, buyerAgentGross - buyerPartnerAmount - buyerTotalExpenseAmount - buyerTaxDeduction);
+  const buyerOfficeNet = Math.max(0, buyerBaseComm - buyerAgentGross);
 
-  const handleSaveContact = async () => {
-    if (!editingContact) return;
-    const { error } = await supabase.from('contacts').upsert({
-      id: editingContact.id || undefined,
-      full_name: editingContact.full_name,
-      contact_type: editingContact.contact_type,
-      phone: editingContact.phone,
-      email: editingContact.email,
-      company: editingContact.company,
-      notes: editingContact.notes
-    });
+  // Genel Toplamlar
+  const totalGrossCollection = sellerTotalGross + buyerTotalGross;
+  const totalAgentEarnings = sellerAgentNet + buyerAgentNet;
+  const totalPartnerShares = sellerPartnerAmount + buyerPartnerAmount;
+  const totalExpenses = sellerTotalExpenseAmount + buyerTotalExpenseAmount;
+  const totalTaxAmount = sellerTaxAmount + buyerTaxAmount;
+  const totalTaxDeductions = sellerTaxDeduction + buyerTaxDeduction;
+  const grandTotalDeductions = totalAgentEarnings + totalPartnerShares + totalExpenses + totalTaxAmount + totalTaxDeductions;
+  const totalOfficeNetIncome = sellerOfficeNet + buyerOfficeNet;
 
-    if (!error) {
-      setEditingContact(null);
-      loadData();
-    } else {
-      alert('Kişi kaydedilirken hata oluştu: ' + error.message);
-    }
-  };
-
-  const openHistoryDetail = async (item: TransactionDetailRecord) => {
-    setSelectedHistoryItem(item);
-    const { data: expData } = await supabase.from('transaction_expenses').select('*').eq('transaction_id', item.id);
-    setSelectedItemExpenses(expData || []);
-  };
-
-  const loadHistoryItemToCalculator = (item: TransactionDetailRecord) => {
-    setTransactionDate(item.created_at ? item.created_at.split('T')[0] : getTodayISODate());
-    setTransactionType(item.transaction_type);
-    setPropertyPrice(Number(item.property_price));
-    setTaxRate(Number(item.tax_rate));
-
-    setSellerName(item.seller_name);
-    setSellerAgentId(item.seller_agent_id || '');
-    setSellerCommType(item.seller_commission_type as any);
-    setSellerCommValue(Number(item.seller_commission_value));
-    setSellerInvoiceType(item.seller_invoice_type as any);
-    setSellerInvoiceAmount(Number(item.seller_invoice_amount));
-    setSellerHasPartner(item.seller_has_partnership);
-    setSellerPartnerName(item.seller_partner_name || '');
-    setSellerPartnerReason(item.seller_partner_reason || '');
-    setSellerPartnerShare(Number(item.seller_partner_share));
-
-    setBuyerName(item.buyer_name);
-    setBuyerAgentId(item.buyer_agent_id || '');
-    setBuyerCommType(item.buyer_commission_type as any);
-    setBuyerCommValue(Number(item.buyer_commission_value));
-    setBuyerInvoiceType(item.buyer_invoice_type as any);
-    setBuyerInvoiceAmount(Number(item.buyer_invoice_amount));
-    setBuyerHasPartner(item.buyer_has_partnership);
-    setBuyerPartnerName(item.buyer_partner_name || '');
-    setBuyerPartnerReason(item.buyer_partner_reason || '');
-    setBuyerPartnerShare(Number(item.buyer_partner_share));
-
-    setSelectedHistoryItem(null);
-    setActiveTab('calculator');
-  };
-
+  // Gider Fonksiyonları
   const addExpense = (side: 'seller' | 'buyer') => {
     const newItem: ExpenseItem = {
       id: Math.random().toString(),
@@ -640,60 +544,7 @@ export default function RealEstateCalculator() {
     else setBuyerExpenses(updater(buyerExpenses));
   };
 
-  const selectedSellerAgent = agents.find(a => a.id === sellerAgentId);
-  const selectedBuyerAgent = agents.find(a => a.id === buyerAgentId);
-
-  const sellerBaseComm = sellerCommType === 'percentage' 
-    ? (propertyPrice * (sellerCommValue || 0)) / 100 
-    : (sellerCommValue || 0);
-
-  const effectiveSellerInvoice = sellerInvoiceType === 'full' 
-    ? sellerBaseComm 
-    : sellerInvoiceType === 'partial' ? (sellerInvoiceAmount || 0) : 0;
-  
-  const sellerTaxAmount = (effectiveSellerInvoice * taxRate) / 100;
-  const sellerTotalGross = sellerBaseComm + sellerTaxAmount;
-
-  const sellerAgentRate = selectedSellerAgent ? selectedSellerAgent.commission_rate : 50;
-  const sellerAgentGross = (sellerBaseComm * sellerAgentRate) / 100;
-  const sellerTaxDeduction = (effectiveSellerInvoice * 0.25 * sellerAgentRate) / 100;
-
-  const sellerTotalExpenseAmount = sellerExpenses.reduce((acc, curr) => acc + (Number(curr.amount) || 0), 0);
-  const sellerPartnerAmount = sellerHasPartner ? (Number(sellerPartnerShare) || 0) : 0;
-  
-  const sellerAgentNet = Math.max(0, sellerAgentGross - sellerPartnerAmount - sellerTotalExpenseAmount - sellerTaxDeduction);
-  const sellerOfficeNet = Math.max(0, sellerBaseComm - sellerAgentGross);
-
-  const buyerBaseComm = buyerCommType === 'percentage' 
-    ? (propertyPrice * (buyerCommValue || 0)) / 100 
-    : (buyerCommValue || 0);
-
-  const effectiveBuyerInvoice = buyerInvoiceType === 'full' 
-    ? buyerBaseComm 
-    : buyerInvoiceType === 'partial' ? (buyerInvoiceAmount || 0) : 0;
-  
-  const buyerTaxAmount = (effectiveBuyerInvoice * taxRate) / 100;
-  const buyerTotalGross = buyerBaseComm + buyerTaxAmount;
-
-  const buyerAgentRate = selectedBuyerAgent ? selectedBuyerAgent.commission_rate : 50;
-  const buyerAgentGross = (buyerBaseComm * buyerAgentRate) / 100;
-  const buyerTaxDeduction = (effectiveBuyerInvoice * 0.25 * buyerAgentRate) / 100;
-
-  const buyerTotalExpenseAmount = buyerExpenses.reduce((acc, curr) => acc + (Number(curr.amount) || 0), 0);
-  const buyerPartnerAmount = buyerHasPartner ? (Number(buyerPartnerShare) || 0) : 0;
-  
-  const buyerAgentNet = Math.max(0, buyerAgentGross - buyerPartnerAmount - buyerTotalExpenseAmount - buyerTaxDeduction);
-  const buyerOfficeNet = Math.max(0, buyerBaseComm - buyerAgentGross);
-
-  const totalGrossCollection = sellerTotalGross + buyerTotalGross;
-  const totalAgentEarnings = sellerAgentNet + buyerAgentNet;
-  const totalPartnerShares = sellerPartnerAmount + buyerPartnerAmount;
-  const totalExpenses = sellerTotalExpenseAmount + buyerTotalExpenseAmount;
-  const totalTaxAmount = sellerTaxAmount + buyerTaxAmount;
-  const totalTaxDeductions = sellerTaxDeduction + buyerTaxDeduction;
-  const grandTotalDeductions = totalAgentEarnings + totalPartnerShares + totalExpenses + totalTaxAmount + totalTaxDeductions;
-  const totalOfficeNetIncome = sellerOfficeNet + buyerOfficeNet;
-
+  // PDF İndirme (Tam 1 A4 Sayfası Boyutlandırma)
   const downloadPDFFromRef = async (targetRef: React.RefObject<HTMLDivElement | null>) => {
     if (!targetRef.current) return;
     setIsPdfLoading(true);
@@ -708,18 +559,29 @@ export default function RealEstateCalculator() {
       const imgData = canvas.toDataURL('image/png');
       const pdf = new jsPDF('p', 'mm', 'a4');
       const pdfWidth = pdf.internal.pageSize.getWidth();
-      const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
+      const pdfHeight = pdf.internal.pageSize.getHeight();
       
-      pdf.addImage(imgData, 'PNG', 0, 0, pdfWidth, pdfHeight);
+      const imgProps = pdf.getImageProperties(imgData);
+      const renderHeight = (imgProps.height * pdfWidth) / imgProps.width;
+
+      if (renderHeight > pdfHeight) {
+        const adjustedWidth = (imgProps.width * pdfHeight) / imgProps.height;
+        const xOffset = (pdfWidth - adjustedWidth) / 2;
+        pdf.addImage(imgData, 'PNG', xOffset, 0, adjustedWidth, pdfHeight);
+      } else {
+        pdf.addImage(imgData, 'PNG', 0, 0, pdfWidth, renderHeight);
+      }
+
       pdf.save(`360IC-Bordro-${Date.now()}.pdf`);
     } catch (err: any) {
-      console.warn('Otomatik PDF hatası, yazdırma penceresine geçiliyor:', err);
+      console.warn('PDF Hatası:', err);
       window.print();
     } finally {
       setIsPdfLoading(false);
     }
   };
 
+  // İşlemi Veritabanına Kaydet
   const saveTransaction = async () => {
     setIsSaving(true);
     try {
@@ -730,13 +592,16 @@ export default function RealEstateCalculator() {
         transaction_type: transactionType,
         property_price: propertyPrice,
         tax_rate: taxRate,
-        seller_name: sellerName || 'Belirtilmedi',
+
+        seller_name: sellerName || (sellerParties[0] || 'Belirtilmedi'),
+        seller_parties: allSellerNames,
         seller_agent_id: sellerAgentId || null,
         seller_commission_type: sellerCommType,
         seller_commission_value: sellerCommValue,
         seller_base_commission: sellerBaseComm,
         seller_invoice_type: sellerInvoiceType,
-        seller_invoice_amount: effectiveSellerInvoice,
+        seller_invoice_tax_included: sellerInvoiceTaxIncluded,
+        seller_invoice_amount: sellerNetInvoiceBase,
         seller_tax_amount: sellerTaxAmount,
         seller_tax_deduction: sellerTaxDeduction,
         seller_total_gross_income: sellerTotalGross,
@@ -750,13 +615,15 @@ export default function RealEstateCalculator() {
         seller_agent_net_earning: sellerAgentNet,
         seller_office_net_share: sellerOfficeNet,
 
-        buyer_name: buyerName || 'Belirtilmedi',
+        buyer_name: buyerName || (buyerParties[0] || 'Belirtilmedi'),
+        buyer_parties: allBuyerNames,
         buyer_agent_id: buyerAgentId || null,
         buyer_commission_type: buyerCommType,
         buyer_commission_value: buyerCommValue,
         buyer_base_commission: buyerBaseComm,
         buyer_invoice_type: buyerInvoiceType,
-        buyer_invoice_amount: effectiveBuyerInvoice,
+        buyer_invoice_tax_included: buyerInvoiceTaxIncluded,
+        buyer_invoice_amount: buyerNetInvoiceBase,
         buyer_tax_amount: buyerTaxAmount,
         buyer_tax_deduction: buyerTaxDeduction,
         buyer_total_gross_income: buyerTotalGross,
@@ -776,9 +643,14 @@ export default function RealEstateCalculator() {
 
       if (transError) throw transError;
 
-      const contactsToSync = [];
-      if (sellerName && sellerName !== 'Belirtilmedi') contactsToSync.push({ full_name: sellerName, contact_type: 'MUSTERI' });
-      if (buyerName && buyerName !== 'Belirtilmedi') contactsToSync.push({ full_name: buyerName, contact_type: 'MUSTERI' });
+      // Rehbere Eşit Bölünerek Senkronizasyon
+      const contactsToSync: { full_name: string; contact_type: 'MUSTERI' | 'ORTAK' }[] = [];
+      allSellerNames.forEach(name => {
+        if (name && name !== 'Belirtilmedi') contactsToSync.push({ full_name: name, contact_type: 'MUSTERI' });
+      });
+      allBuyerNames.forEach(name => {
+        if (name && name !== 'Belirtilmedi') contactsToSync.push({ full_name: name, contact_type: 'MUSTERI' });
+      });
       if (sellerPartnerName) contactsToSync.push({ full_name: sellerPartnerName, contact_type: 'ORTAK' });
       if (buyerPartnerName) contactsToSync.push({ full_name: buyerPartnerName, contact_type: 'ORTAK' });
 
@@ -821,6 +693,462 @@ export default function RealEstateCalculator() {
     }
   };
 
+  // Filtrelenmiş İşlemler
+  const filteredTransactions = useMemo(() => {
+    return transactionsHistory.filter(t => {
+      const transDate = new Date(t.created_at);
+      const now = new Date();
+
+      if (dateFilter === 'this_month') {
+        if (transDate.getMonth() !== now.getMonth() || transDate.getFullYear() !== now.getFullYear()) return false;
+      } else if (dateFilter === 'this_year') {
+        if (transDate.getFullYear() !== now.getFullYear()) return false;
+      } else if (dateFilter === 'custom') {
+        if (customStartDate && new Date(t.created_at) < new Date(customStartDate)) return false;
+        if (customEndDate && new Date(t.created_at) > new Date(customEndDate + 'T23:59:59')) return false;
+      }
+
+      const sellerAg = agents.find(a => a.id === t.seller_agent_id);
+      const buyerAg = agents.find(a => a.id === t.buyer_agent_id);
+
+      if (selectedOfficeFilter !== 'all') {
+        const sellerOfficeMatch = sellerAg && (sellerAg.office_name || 'Merkez Ofis') === selectedOfficeFilter;
+        const buyerOfficeMatch = buyerAg && (buyerAg.office_name || 'Merkez Ofis') === selectedOfficeFilter;
+        if (!sellerOfficeMatch && !buyerOfficeMatch) return false;
+      }
+
+      if (selectedAgentFilter !== 'all') {
+        const isSellerAgent = t.seller_agent_id === selectedAgentFilter;
+        const isBuyerAgent = t.buyer_agent_id === selectedAgentFilter;
+        if (!isSellerAgent && !isBuyerAgent) return false;
+      }
+
+      return true;
+    });
+  }, [transactionsHistory, dateFilter, customStartDate, customEndDate, selectedAgentFilter, selectedOfficeFilter, agents]);
+
+  // Raporlama & Analiz Özetleri
+  const analyticsSummary = useMemo(() => {
+    let totalSalesCount = 0;
+    let totalRentCount = 0;
+    let totalGrossVolume = 0;
+    let totalOfficeNet = 0;
+    let totalAgentNetEarnings = 0;
+
+    const agentStats: Record<string, { id: string; name: string; office: string; count: number; gross: number; agentNet: number; officeNet: number }> = {};
+    const contactVolumeStats: Record<string, { count: number; totalGross: number; role: string }> = {};
+
+    filteredTransactions.forEach(t => {
+      if (t.transaction_type === 'SATIŞ') totalSalesCount++;
+      else totalRentCount++;
+
+      // Satıcı Tarafı Danışman
+      if (t.seller_agent_id) {
+        const ag = agents.find(a => a.id === t.seller_agent_id);
+        const name = ag ? `[${ag.code}] ${ag.full_name}` : 'Bilinmeyen Danışman';
+        const office = ag?.office_name || 'Merkez Ofis';
+        if (!agentStats[t.seller_agent_id]) agentStats[t.seller_agent_id] = { id: t.seller_agent_id, name, office, count: 0, gross: 0, agentNet: 0, officeNet: 0 };
+        agentStats[t.seller_agent_id].count += 1;
+        agentStats[t.seller_agent_id].gross += Number(t.seller_base_commission) || 0;
+        agentStats[t.seller_agent_id].agentNet += Number(t.seller_agent_net_earning) || 0;
+        agentStats[t.seller_agent_id].officeNet += Number(t.seller_office_net_share) || 0;
+
+        if (selectedAgentFilter === t.seller_agent_id) {
+          totalAgentNetEarnings += Number(t.seller_agent_net_earning) || 0;
+        }
+      }
+
+      // Alıcı Tarafı Danışman
+      if (t.buyer_agent_id) {
+        const ag = agents.find(a => a.id === t.buyer_agent_id);
+        const name = ag ? `[${ag.code}] ${ag.full_name}` : 'Bilinmeyen Danışman';
+        const office = ag?.office_name || 'Merkez Ofis';
+        if (!agentStats[t.buyer_agent_id]) agentStats[t.buyer_agent_id] = { id: t.buyer_agent_id, name, office, count: 0, gross: 0, agentNet: 0, officeNet: 0 };
+        agentStats[t.buyer_agent_id].count += 1;
+        agentStats[t.buyer_agent_id].gross += Number(t.buyer_base_commission) || 0;
+        agentStats[t.buyer_agent_id].agentNet += Number(t.buyer_agent_net_earning) || 0;
+        agentStats[t.buyer_agent_id].officeNet += Number(t.buyer_office_net_share) || 0;
+
+        if (selectedAgentFilter === t.buyer_agent_id) {
+          totalAgentNetEarnings += Number(t.buyer_agent_net_earning) || 0;
+        }
+      }
+
+      if (selectedAgentFilter === 'all') {
+        totalGrossVolume += Number(t.total_transaction_gross) || 0;
+        totalOfficeNet += Number(t.total_office_net_income) || 0;
+      } else {
+        if (t.seller_agent_id === selectedAgentFilter) {
+          totalGrossVolume += Number(t.seller_total_gross_income) || 0;
+          totalOfficeNet += Number(t.seller_office_net_share) || 0;
+        }
+        if (t.buyer_agent_id === selectedAgentFilter) {
+          totalGrossVolume += Number(t.buyer_total_gross_income) || 0;
+          totalOfficeNet += Number(t.buyer_office_net_share) || 0;
+        }
+      }
+
+      // Müşteri / Ortak Gelir Bölüşümü (Madde 3)
+      const sParties = (t.seller_parties && t.seller_parties.length > 0) ? t.seller_parties : [t.seller_name || 'Belirtilmedi'];
+      const sSharePerPerson = (Number(t.seller_base_commission) || 0) / (sParties.length || 1);
+      sParties.forEach(name => {
+        if (name && name !== 'Belirtilmedi') {
+          if (!contactVolumeStats[name]) contactVolumeStats[name] = { count: 0, totalGross: 0, role: 'Satıcı / Kiraya Veren' };
+          contactVolumeStats[name].count += 1;
+          contactVolumeStats[name].totalGross += sSharePerPerson;
+        }
+      });
+
+      const bParties = (t.buyer_parties && t.buyer_parties.length > 0) ? t.buyer_parties : [t.buyer_name || 'Belirtilmedi'];
+      const bSharePerPerson = (Number(t.buyer_base_commission) || 0) / (bParties.length || 1);
+      bParties.forEach(name => {
+        if (name && name !== 'Belirtilmedi') {
+          if (!contactVolumeStats[name]) contactVolumeStats[name] = { count: 0, totalGross: 0, role: 'Alıcı / Kiracı' };
+          contactVolumeStats[name].count += 1;
+          contactVolumeStats[name].totalGross += bSharePerPerson;
+        }
+      });
+
+      if (t.seller_partner_name) {
+        if (!contactVolumeStats[t.seller_partner_name]) contactVolumeStats[t.seller_partner_name] = { count: 0, totalGross: 0, role: 'Harici Ortak' };
+        contactVolumeStats[t.seller_partner_name].count += 1;
+        contactVolumeStats[t.seller_partner_name].totalGross += Number(t.seller_partner_share) || 0;
+      }
+    });
+
+    const topAgentsByCount = Object.values(agentStats).sort((a, b) => b.count - a.count);
+    const topAgentsByGross = Object.values(agentStats).sort((a, b) => b.gross - a.gross);
+
+    const topContactsByVolume = Object.entries(contactVolumeStats)
+      .map(([name, data]) => ({ name, ...data }))
+      .sort((a, b) => b.totalGross - a.totalGross);
+
+    // Zaman Akışı Grafiği
+    const timelineDataMap: Record<string, { dateLabel: string; gross: number; net: number; agentEarn: number }> = {};
+    filteredTransactions.forEach(t => {
+      const date = new Date(t.created_at);
+      const key = `${date.getFullYear()}-${(date.getMonth() + 1).toString().padStart(2, '0')}`;
+      if (!timelineDataMap[key]) {
+        timelineDataMap[key] = {
+          dateLabel: date.toLocaleDateString('tr-TR', { month: 'short', year: '2-digit' }),
+          gross: 0,
+          net: 0,
+          agentEarn: 0
+        };
+      }
+
+      if (selectedAgentFilter === 'all') {
+        timelineDataMap[key].gross += Number(t.total_transaction_gross) || 0;
+        timelineDataMap[key].net += Number(t.total_office_net_income) || 0;
+      } else {
+        if (t.seller_agent_id === selectedAgentFilter) {
+          timelineDataMap[key].gross += Number(t.seller_total_gross_income) || 0;
+          timelineDataMap[key].net += Number(t.seller_office_net_share) || 0;
+          timelineDataMap[key].agentEarn += Number(t.seller_agent_net_earning) || 0;
+        }
+        if (t.buyer_agent_id === selectedAgentFilter) {
+          timelineDataMap[key].gross += Number(t.buyer_total_gross_income) || 0;
+          timelineDataMap[key].net += Number(t.buyer_office_net_share) || 0;
+          timelineDataMap[key].agentEarn += Number(t.buyer_agent_net_earning) || 0;
+        }
+      }
+    });
+
+    const chartTimelineData = Object.values(timelineDataMap).reverse();
+
+    // 7. MADDE: Yılbaşından İtibaren İlk 3 Danışmanın Çizgi Grafikleri
+    const currentYear = new Date().getFullYear();
+    const top3CountAgents = topAgentsByCount.slice(0, 3);
+    const top3GrossAgents = topAgentsByGross.slice(0, 3);
+
+    const months = ['Oca', 'Şub', 'Mar', 'Nis', 'May', 'Haz', 'Tem', 'Ağu', 'Eyl', 'Eki', 'Kas', 'Ara'];
+    const currentMonthIndex = new Date().getMonth();
+
+    // İşlem Adedi Çizgi Grafiği Verisi
+    const top3CountTimeline = months.slice(0, currentMonthIndex + 1).map((mName, mIdx) => {
+      const row: any = { month: mName };
+      top3CountAgents.forEach(ag => {
+        const countInMonth = transactionsHistory.filter(t => {
+          const d = new Date(t.created_at);
+          return d.getFullYear() === currentYear && d.getMonth() === mIdx && (t.seller_agent_id === ag.id || t.buyer_agent_id === ag.id);
+        }).length;
+        row[ag.name] = countInMonth;
+      });
+      return row;
+    });
+
+    // Ciro / Gelir Çizgi Grafiği Verisi
+    const top3GrossTimeline = months.slice(0, currentMonthIndex + 1).map((mName, mIdx) => {
+      const row: any = { month: mName };
+      top3GrossAgents.forEach(ag => {
+        let grossInMonth = 0;
+        transactionsHistory.forEach(t => {
+          const d = new Date(t.created_at);
+          if (d.getFullYear() === currentYear && d.getMonth() === mIdx) {
+            if (t.seller_agent_id === ag.id) grossInMonth += Number(t.seller_base_commission) || 0;
+            if (t.buyer_agent_id === ag.id) grossInMonth += Number(t.buyer_base_commission) || 0;
+          }
+        });
+        row[ag.name] = Math.round(grossInMonth);
+      });
+      return row;
+    });
+
+    const pieData = [
+      { name: 'Satış İşlemleri', value: totalSalesCount },
+      { name: 'Kiralama İşlemleri', value: totalRentCount }
+    ];
+
+    return {
+      totalTransactions: filteredTransactions.length,
+      totalSalesCount,
+      totalRentCount,
+      totalGrossVolume,
+      totalOfficeNet,
+      totalAgentNetEarnings,
+      topAgentsByCount,
+      topContactsByVolume,
+      chartTimelineData,
+      pieData,
+      top3CountAgents,
+      top3GrossAgents,
+      top3CountTimeline,
+      top3GrossTimeline
+    };
+  }, [filteredTransactions, transactionsHistory, agents, selectedAgentFilter]);
+
+  // Hedef Hesaplama Motoru (Madde 8)
+  const evaluatedAgentTargets = useMemo(() => {
+    return agentTargets.map(tgt => {
+      const ag = agents.find(a => a.id === tgt.agent_id);
+      const start = new Date(tgt.start_date);
+      const end = new Date(tgt.end_date + 'T23:59:59');
+
+      // O tarih aralığında danışmanın yaptığı hedef türündeki işlemler
+      const matchingTransactions = transactionsHistory.filter(t => {
+        const d = new Date(t.created_at);
+        const inDate = d >= start && d <= end;
+        const typeMatch = t.transaction_type === tgt.target_type;
+        const isAgent = t.seller_agent_id === tgt.agent_id || t.buyer_agent_id === tgt.agent_id;
+        return inDate && typeMatch && isAgent;
+      });
+
+      const achievedCount = matchingTransactions.length;
+      const isTargetMet = achievedCount >= tgt.target_count;
+
+      // Ödül Hesabı
+      let calculatedBonus = 0;
+      if (isTargetMet) {
+        if (tgt.reward_type === 'FIXED') {
+          calculatedBonus = Number(tgt.reward_value);
+        } else {
+          // Yüzde ise: Danışmanın bu işlemlerden ürettiği komisyon matrahı toplamı üzerinden ek prim (%5 vb.)
+          let totalCommBase = 0;
+          matchingTransactions.forEach(t => {
+            if (t.seller_agent_id === tgt.agent_id) totalCommBase += Number(t.seller_base_commission) || 0;
+            if (t.buyer_agent_id === tgt.agent_id) totalCommBase += Number(t.buyer_base_commission) || 0;
+          });
+          calculatedBonus = (totalCommBase * Number(tgt.reward_value)) / 100;
+        }
+      }
+
+      return {
+        ...tgt,
+        agent_name: ag ? `[${ag.code}] ${ag.full_name}` : 'Bilinmeyen Danışman',
+        agent_office: ag?.office_name || 'Merkez Ofis',
+        achievedCount,
+        isTargetMet,
+        calculatedBonus
+      };
+    });
+  }, [agentTargets, transactionsHistory, agents]);
+
+  // Hedef İşlemleri
+  const handleAssignTarget = async () => {
+    if (!targetAgentId || !targetTitle) return alert('Lütfen danışman ve hedef başlığını girin.');
+    const { error } = await supabase.from('agent_targets').insert({
+      agent_id: targetAgentId,
+      title: targetTitle,
+      target_type: targetType,
+      period_type: targetPeriod,
+      start_date: targetStartDate,
+      end_date: targetEndDate,
+      target_count: targetCount,
+      reward_type: targetRewardType,
+      reward_value: targetRewardValue,
+      is_paid: false
+    });
+
+    if (!error) {
+      alert('Hedef danışmana başarıyla tanımlandı!');
+      setTargetTitle('');
+      loadData();
+    } else {
+      alert('Hata: ' + error.message);
+    }
+  };
+
+  const handleSelectTemplate = (tplId: string) => {
+    setSelectedTemplateId(tplId);
+    if (!tplId) return;
+    const tpl = targetTemplates.find(t => t.id === tplId);
+    if (tpl) {
+      setTargetTitle(tpl.title);
+      setTargetType(tpl.target_type);
+      setTargetPeriod(tpl.period_type);
+      setTargetCount(tpl.target_count);
+      setTargetRewardType(tpl.reward_type);
+      setTargetRewardValue(tpl.reward_value);
+
+      const now = new Date();
+      if (tpl.period_type === 'AYLIK') {
+        const endOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+        setTargetEndDate(endOfMonth.toISOString().split('T')[0]);
+      } else {
+        const endOf3M = new Date(now.getFullYear(), now.getMonth() + 3, 0);
+        setTargetEndDate(endOf3M.toISOString().split('T')[0]);
+      }
+    }
+  };
+
+  const handleSaveTemplate = async () => {
+    if (!newTplTitle) return alert('Lütfen şablon başlığını girin.');
+    const { error } = await supabase.from('target_templates').insert({
+      title: newTplTitle,
+      target_type: newTplType,
+      period_type: newTplPeriod,
+      target_count: newTplCount,
+      reward_type: newTplRewardType,
+      reward_value: newTplRewardValue
+    });
+    if (!error) {
+      alert('Hazır hedef şablonu kaydedildi!');
+      setNewTplTitle('');
+      loadData();
+    } else {
+      alert('Hata: ' + error.message);
+    }
+  };
+
+  const toggleTargetPaid = async (targetId: string, currentStatus: boolean) => {
+    const newStatus = !currentStatus;
+    const { error } = await supabase.from('agent_targets').update({
+      is_paid: newStatus,
+      paid_at: newStatus ? new Date().toISOString() : null
+    }).eq('id', targetId);
+
+    if (!error) {
+      loadData();
+    } else {
+      alert('Durum güncellenirken hata: ' + error.message);
+    }
+  };
+
+  const handleDeleteTarget = async (targetId: string) => {
+    if (!confirm('Bu hedef kaydını silmek istediğinize emin misiniz?')) return;
+    await supabase.from('agent_targets').delete().eq('id', targetId);
+    loadData();
+  };
+
+  // Diğer Yardımcı Fonksiyonlar
+  const handleDeleteTransaction = async (id: string) => {
+    if (!confirm('Bu işlemi tamamen silmek istediğinize emin misiniz?')) return;
+    await supabase.from('transaction_expenses').delete().eq('transaction_id', id);
+    const { error } = await supabase.from('transactions').delete().eq('id', id);
+    if (!error) {
+      if (selectedHistoryItem?.id === id) setSelectedHistoryItem(null);
+      loadData();
+    }
+  };
+
+  const handleAddAgent = async () => {
+    if (!newAgentCode || !newAgentName) return alert('Lütfen danışman kodu ve adını girin.');
+    const { error } = await supabase.from('agents').insert({
+      code: newAgentCode,
+      full_name: newAgentName,
+      commission_rate: newAgentRate,
+      office_name: newAgentOffice || 'Merkez Ofis',
+      is_active: true
+    });
+    if (!error) {
+      setNewAgentCode('');
+      setNewAgentName('');
+      loadData();
+    }
+  };
+
+  const handleUpdateAgent = async () => {
+    if (!editingAgent) return;
+    const { error } = await supabase.from('agents').update({
+      code: editingAgent.code,
+      full_name: editingAgent.full_name,
+      commission_rate: editingAgent.commission_rate,
+      office_name: editingAgent.office_name,
+      is_active: editingAgent.is_active
+    }).eq('id', editingAgent.id);
+    if (!error) {
+      setEditingAgent(null);
+      loadData();
+    }
+  };
+
+  const toggleAgentActiveStatus = async (agent: Agent) => {
+    const newStatus = !(agent.is_active !== false);
+    await supabase.from('agents').update({ is_active: newStatus }).eq('id', agent.id);
+    loadData();
+  };
+
+  const handleDeleteAgent = async (id: string) => {
+    if (!confirm('Danışmanı silmek istediğinize emin misiniz?')) return;
+    await supabase.from('agents').delete().eq('id', id);
+    loadData();
+  };
+
+  const handleAddExpenseType = async () => {
+    if (!newExpName) return alert('Lütfen gider adını girin.');
+    await supabase.from('expense_types').insert({ name: newExpName, default_cost: newExpCost });
+    setNewExpName('');
+    setNewExpCost(0);
+    loadData();
+  };
+
+  const handleUpdateExpenseType = async () => {
+    if (!editingExpenseType) return;
+    await supabase.from('expense_types').update({
+      name: editingExpenseType.name,
+      default_cost: editingExpenseType.default_cost
+    }).eq('id', editingExpenseType.id);
+    setEditingExpenseType(null);
+    loadData();
+  };
+
+  const handleDeleteExpenseType = async (id: string) => {
+    if (!confirm('Gider türünü silmek istediğinize emin misiniz?')) return;
+    await supabase.from('expense_types').delete().eq('id', id);
+    loadData();
+  };
+
+  const handleSaveContact = async () => {
+    if (!editingContact) return;
+    await supabase.from('contacts').upsert({
+      id: editingContact.id || undefined,
+      full_name: editingContact.full_name,
+      contact_type: editingContact.contact_type,
+      phone: editingContact.phone,
+      email: editingContact.email,
+      company: editingContact.company,
+      notes: editingContact.notes
+    });
+    setEditingContact(null);
+    loadData();
+  };
+
+  const openHistoryDetail = async (item: TransactionDetailRecord) => {
+    setSelectedHistoryItem(item);
+    const { data: expData } = await supabase.from('transaction_expenses').select('*').eq('transaction_id', item.id);
+    setSelectedItemExpenses(expData || []);
+  };
+
   const filteredContactsList = contacts.filter(c => 
     c.full_name.toLowerCase().includes(contactSearchQuery.toLowerCase()) ||
     (c.company && c.company.toLowerCase().includes(contactSearchQuery.toLowerCase()))
@@ -828,6 +1156,7 @@ export default function RealEstateCalculator() {
 
   const activeFilteredAgentObj = agents.find(a => a.id === selectedAgentFilter);
 
+  // Giriş Ekranı
   if (!isAuthenticated) {
     return (
       <div className="min-h-screen bg-slate-950 flex items-center justify-center p-4">
@@ -898,6 +1227,12 @@ export default function RealEstateCalculator() {
                 <Calculator className="w-4 h-4" /> Hesapla
               </button>
               <button
+                onClick={() => setActiveTab('targets')}
+                className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-bold transition ${activeTab === 'targets' ? 'bg-slate-900 text-amber-500 shadow-md' : 'text-slate-500 hover:text-slate-900'}`}
+              >
+                <Target className="w-4 h-4 text-amber-500" /> Hedef Belirle & Takip
+              </button>
+              <button
                 onClick={() => setActiveTab('analytics')}
                 className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-bold transition ${activeTab === 'analytics' ? 'bg-slate-900 text-amber-500 shadow-md' : 'text-slate-500 hover:text-slate-900'}`}
               >
@@ -951,7 +1286,7 @@ export default function RealEstateCalculator() {
                 className="flex items-center gap-2 bg-slate-900 hover:bg-slate-800 text-amber-400 px-6 py-2.5 rounded-xl font-bold shadow-md transition text-sm disabled:opacity-50 border border-slate-700"
               >
                 {isPdfLoading ? <span className="animate-spin">⏳</span> : <Download className="w-4 h-4" />}
-                {isPdfLoading ? 'PDF Hazırlanıyor...' : 'PDF İndir / Yazdır'}
+                {isPdfLoading ? 'PDF Hazırlanıyor...' : '1 Sayfa A4 PDF İndir'}
               </button>
             </div>
 
@@ -962,6 +1297,7 @@ export default function RealEstateCalculator() {
               </div>
             )}
 
+            {/* Üst İşlem Parametreleri */}
             <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
                 <div>
@@ -982,16 +1318,16 @@ export default function RealEstateCalculator() {
                   <select 
                     value={transactionType}
                     onChange={(e) => setTransactionType(e.target.value)}
-                    className="w-full p-3 rounded-xl border border-slate-300 bg-slate-50 font-bold text-slate-900 focus:ring-2 focus:ring-amber-500 focus:outline-none"
+                    className="w-full p-3 rounded-xl border border-slate-300 bg-slate-50 font-black text-slate-900 focus:ring-2 focus:ring-amber-500 focus:outline-none"
                   >
-                    <option value="SATIŞ">Satış İşlemi</option>
-                    <option value="KİRALAMA">Kiralama İşlemi</option>
+                    <option value="SATIŞ">🏢 Satış İşlemi</option>
+                    <option value="KİRALAMA">🔑 Kiralama İşlemi</option>
                   </select>
                 </div>
 
                 <div>
                   <label className="block text-xs font-bold uppercase tracking-wider text-slate-500 mb-2">
-                    {transactionType === 'SATIŞ' ? 'Gayrimenkul Satış Bedeli' : 'Aylık Kira Bedeli'}
+                    {isRent ? 'Aylık Kira Bedeli' : 'Gayrimenkul Satış Bedeli'}
                   </label>
                   <div className="relative">
                     <input
@@ -1021,22 +1357,40 @@ export default function RealEstateCalculator() {
               </div>
             </div>
 
-            {/* Kolonlar */}
+            {/* İki Kolon: Satıcı/Kiraya Veren & Alıcı/Kiracı */}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
               
-              {/* SATICI TARAFI */}
+              {/* SATICI / KİRAYA VEREN */}
               <div className="bg-white p-6 rounded-2xl shadow-sm border-t-4 border-amber-500 space-y-5">
                 <div className="border-b border-slate-100 pb-3 flex items-center justify-between">
                   <h2 className="text-base font-black text-slate-900 flex items-center gap-2">
                     <span className="w-3 h-3 rounded-full bg-amber-500"></span>
-                    Satıcı Tarafı (Portföy)
+                    {sellerTitle}
                   </h2>
+                  <span className="text-[11px] font-bold text-amber-600 bg-amber-50 px-2 py-0.5 rounded-md">
+                    {allSellerNames.length > 1 ? `${allSellerNames.length} Ortaklı Mülk` : 'Tek Müşteri'}
+                  </span>
                 </div>
 
+                {/* Danışman & Ana Müşteri */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div>
+                    <label className="block text-xs font-bold text-slate-600 mb-1">Portföy Danışmanı</label>
+                    <select
+                      value={sellerAgentId}
+                      onChange={(e) => setSellerAgentId(e.target.value)}
+                      className="w-full p-2.5 rounded-xl border border-slate-300 text-sm bg-slate-50 font-bold focus:ring-2 focus:ring-amber-500 focus:outline-none"
+                    >
+                      <option value="">Danışman Seçin</option>
+                      {activeAgents.map(a => (
+                        <option key={a.id} value={a.id}>[{a.code}] {a.full_name} ({a.office_name || 'Merkez'})</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
                     <div className="flex justify-between items-center mb-1">
-                      <label className="text-xs font-bold text-slate-600">Müşteri Adı</label>
+                      <label className="text-xs font-bold text-slate-600">Ana Müşteri Adı</label>
                       <button 
                         type="button" 
                         onClick={() => { setSellerInputMode(sellerInputMode === 'select' ? 'new' : 'select'); setSellerName(''); }}
@@ -1053,7 +1407,7 @@ export default function RealEstateCalculator() {
                       >
                         <option value="">Kayıtlı Müşteri Seçin</option>
                         {contacts.filter(c => c.contact_type === 'MUSTERI').map(c => (
-                          <option key={c.id} value={c.full_name}>{c.full_name} {c.company ? `(${c.company})` : ''}</option>
+                          <option key={c.id} value={c.full_name}>{c.full_name}</option>
                         ))}
                       </select>
                     ) : (
@@ -1066,20 +1420,48 @@ export default function RealEstateCalculator() {
                       />
                     )}
                   </div>
+                </div>
 
-                  <div>
-                    <label className="block text-xs font-bold text-slate-600 mb-1">Danışman</label>
-                    <select
-                      value={sellerAgentId}
-                      onChange={(e) => setSellerAgentId(e.target.value)}
-                      className="w-full p-2.5 rounded-xl border border-slate-300 text-sm bg-slate-50 font-bold focus:ring-2 focus:ring-amber-500 focus:outline-none"
-                    >
-                      <option value="">Danışman Seçin</option>
-                      {activeAgents.map(a => (
-                        <option key={a.id} value={a.id}>[{a.code}] {a.full_name} (%{a.commission_rate})</option>
-                      ))}
-                    </select>
+                {/* Çoklu Müşteri / Hissedar Girişi (Madde 3) */}
+                <div className="p-3 bg-amber-50/50 rounded-xl border border-amber-200 space-y-2">
+                  <div className="flex justify-between items-center">
+                    <span className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+                      <Users className="w-3.5 h-3.5 text-amber-600" />
+                      Ortak / Ek {sellerTitle} Girişi (Hissedarlar)
+                    </span>
+                    <span className="text-[10px] text-slate-500 font-medium">Gelir eşit paylaştırılır</span>
                   </div>
+
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      placeholder="Ek Müşteri Adı (Örn: Deniz Şahin)"
+                      value={newSellerPartyInput}
+                      onChange={(e) => setNewSellerPartyInput(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addSellerParty(newSellerPartyInput); } }}
+                      className="flex-1 p-2 bg-white rounded-lg border border-slate-300 text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-amber-500"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => addSellerParty(newSellerPartyInput)}
+                      className="px-3 py-2 bg-slate-900 text-amber-400 font-bold rounded-lg text-xs shadow-sm hover:bg-black transition"
+                    >
+                      + Ekle
+                    </button>
+                  </div>
+
+                  {sellerParties.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5 pt-1">
+                      {sellerParties.map((p, idx) => (
+                        <span key={idx} className="inline-flex items-center gap-1.5 bg-white border border-amber-300 px-2.5 py-1 rounded-md text-xs font-bold text-slate-800 shadow-sm">
+                          {p}
+                          <button type="button" onClick={() => removeSellerParty(idx)} className="text-red-500 hover:text-red-700">
+                            <X className="w-3.5 h-3.5" />
+                          </button>
+                        </span>
+                      ))}
+                    </div>
+                  )}
                 </div>
 
                 {/* Komisyon */}
@@ -1124,9 +1506,9 @@ export default function RealEstateCalculator() {
                   </div>
                 </div>
 
-                {/* Fatura */}
+                {/* Fatura Durumu & KDV Dahil/Hariç (Madde 4) */}
                 <div className="p-4 bg-slate-50 rounded-xl border border-slate-200/70 space-y-3">
-                  <span className="text-xs font-bold text-slate-800 block">Fatura Durumu</span>
+                  <span className="text-xs font-bold text-slate-800 block">Fatura Seçeneği</span>
                   <div className="grid grid-cols-3 gap-2">
                     <button
                       type="button"
@@ -1151,19 +1533,43 @@ export default function RealEstateCalculator() {
                     </button>
                   </div>
 
-                  {sellerInvoiceType === 'partial' && (
-                    <div className="pt-2">
-                      <label className="block text-xs font-bold text-slate-600 mb-1">Faturalandırılacak Tutar</label>
-                      <div className="relative">
-                        <input
-                          type="text"
-                          value={formatInputDisplay(sellerInvoiceAmount)}
-                          placeholder="0"
-                          onChange={(e) => setSellerInvoiceAmount(parseInputValue(e.target.value))}
-                          className="w-full p-2 rounded-lg border border-slate-300 text-sm font-bold pr-10 focus:ring-2 focus:ring-amber-500 focus:outline-none"
-                        />
-                        <span className="absolute right-3 top-2.5 text-slate-400 text-xs font-bold">TL</span>
+                  {sellerInvoiceType !== 'unbilled' && (
+                    <div className="p-3 bg-white rounded-lg border border-slate-200 space-y-3">
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-bold text-slate-700">KDV Hesabı:</span>
+                        <div className="flex gap-1 bg-slate-100 p-1 rounded-lg">
+                          <button
+                            type="button"
+                            onClick={() => setSellerInvoiceTaxIncluded(false)}
+                            className={`px-2.5 py-1 rounded text-xs font-bold transition ${!sellerInvoiceTaxIncluded ? 'bg-slate-900 text-white shadow-sm' : 'text-slate-500'}`}
+                          >
+                            KDV Hariç (+%20)
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setSellerInvoiceTaxIncluded(true)}
+                            className={`px-2.5 py-1 rounded text-xs font-bold transition ${sellerInvoiceTaxIncluded ? 'bg-amber-600 text-white shadow-sm' : 'text-slate-500'}`}
+                          >
+                            KDV Dahil (İçinden düş)
+                          </button>
+                        </div>
                       </div>
+
+                      {sellerInvoiceType === 'partial' && (
+                        <div>
+                          <label className="block text-xs font-bold text-slate-600 mb-1">Faturalandırılacak Tutar</label>
+                          <div className="relative">
+                            <input
+                              type="text"
+                              value={formatInputDisplay(sellerInvoiceAmount)}
+                              placeholder="0"
+                              onChange={(e) => setSellerInvoiceAmount(parseInputValue(e.target.value))}
+                              className="w-full p-2 rounded-lg border border-slate-300 text-sm font-bold pr-10 focus:ring-2 focus:ring-amber-500 focus:outline-none"
+                            />
+                            <span className="absolute right-3 top-2.5 text-slate-400 text-xs font-bold">TL</span>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   )}
 
@@ -1173,7 +1579,7 @@ export default function RealEstateCalculator() {
                   </div>
                 </div>
 
-                {/* Ortak Çalışma */}
+                {/* Ortak Çalışma Payı */}
                 <div className="p-4 bg-slate-50 rounded-xl border border-slate-200/70 space-y-3">
                   <label className="flex items-center gap-2 cursor-pointer select-none">
                     <input
@@ -1182,7 +1588,7 @@ export default function RealEstateCalculator() {
                       onChange={(e) => setSellerHasPartner(e.target.checked)}
                       className="w-4 h-4 rounded text-amber-600 focus:ring-amber-500"
                     />
-                    <span className="text-xs font-bold text-slate-800">Ortak Çalışma Payı Düş</span>
+                    <span className="text-xs font-bold text-slate-800">Harici Ortak / Emlakçı Payı Düş</span>
                   </label>
 
                   {sellerHasPartner && (
@@ -1310,7 +1716,7 @@ export default function RealEstateCalculator() {
                   </div>
                 </div>
 
-                {/* Hak Ediş Özeti & Vergi Kesintisi */}
+                {/* Hak Ediş Özeti */}
                 <div className="bg-amber-50/50 border border-amber-200 p-4 rounded-xl space-y-2 text-xs">
                   <div className="flex justify-between text-slate-700 font-bold">
                     <span>Brüt Danışman Payı (%{sellerAgentRate}):</span>
@@ -1341,19 +1747,37 @@ export default function RealEstateCalculator() {
                 </div>
               </div>
 
-              {/* ALICI TARAFI */}
+              {/* ALICI / KİRALAYAN */}
               <div className="bg-white p-6 rounded-2xl shadow-sm border-t-4 border-emerald-500 space-y-5">
                 <div className="border-b border-slate-100 pb-3 flex items-center justify-between">
                   <h2 className="text-base font-black text-slate-900 flex items-center gap-2">
                     <span className="w-3 h-3 rounded-full bg-emerald-500"></span>
-                    Alıcı Tarafı (Müşteri)
+                    {buyerTitle}
                   </h2>
+                  <span className="text-[11px] font-bold text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-md">
+                    {allBuyerNames.length > 1 ? `${allBuyerNames.length} Ortak Müşteri` : 'Tek Müşteri'}
+                  </span>
                 </div>
 
+                {/* Danışman & Ana Müşteri */}
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div>
+                    <label className="block text-xs font-bold text-slate-600 mb-1">Müşteri Danışmanı</label>
+                    <select
+                      value={buyerAgentId}
+                      onChange={(e) => setBuyerAgentId(e.target.value)}
+                      className="w-full p-2.5 rounded-xl border border-slate-300 text-sm bg-slate-50 font-bold focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                    >
+                      <option value="">Danışman Seçin</option>
+                      {activeAgents.map(a => (
+                        <option key={a.id} value={a.id}>[{a.code}] {a.full_name} ({a.office_name || 'Merkez'})</option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
                     <div className="flex justify-between items-center mb-1">
-                      <label className="text-xs font-bold text-slate-600">Müşteri Adı</label>
+                      <label className="text-xs font-bold text-slate-600">Ana Müşteri Adı</label>
                       <button 
                         type="button" 
                         onClick={() => { setBuyerInputMode(buyerInputMode === 'select' ? 'new' : 'select'); setBuyerName(''); }}
@@ -1370,7 +1794,7 @@ export default function RealEstateCalculator() {
                       >
                         <option value="">Kayıtlı Müşteri Seçin</option>
                         {contacts.filter(c => c.contact_type === 'MUSTERI').map(c => (
-                          <option key={c.id} value={c.full_name}>{c.full_name} {c.company ? `(${c.company})` : ''}</option>
+                          <option key={c.id} value={c.full_name}>{c.full_name}</option>
                         ))}
                       </select>
                     ) : (
@@ -1383,20 +1807,48 @@ export default function RealEstateCalculator() {
                       />
                     )}
                   </div>
+                </div>
 
-                  <div>
-                    <label className="block text-xs font-bold text-slate-600 mb-1">Danışman</label>
-                    <select
-                      value={buyerAgentId}
-                      onChange={(e) => setBuyerAgentId(e.target.value)}
-                      className="w-full p-2.5 rounded-xl border border-slate-300 text-sm bg-slate-50 font-bold focus:ring-2 focus:ring-emerald-500 focus:outline-none"
-                    >
-                      <option value="">Danışman Seçin</option>
-                      {activeAgents.map(a => (
-                        <option key={a.id} value={a.id}>[{a.code}] {a.full_name} (%{a.commission_rate})</option>
-                      ))}
-                    </select>
+                {/* Çoklu Müşteri / Hissedar Girişi (Madde 3) */}
+                <div className="p-3 bg-emerald-50/50 rounded-xl border border-emerald-200 space-y-2">
+                  <div className="flex justify-between items-center">
+                    <span className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+                      <Users className="w-3.5 h-3.5 text-emerald-600" />
+                      Ortak / Ek {buyerTitle} Girişi
+                    </span>
+                    <span className="text-[10px] text-slate-500 font-medium">Gelir eşit paylaştırılır</span>
                   </div>
+
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      placeholder="Ek Müşteri Adı (Örn: Bora Yıldız)"
+                      value={newBuyerPartyInput}
+                      onChange={(e) => setNewBuyerPartyInput(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addBuyerParty(newBuyerPartyInput); } }}
+                      className="flex-1 p-2 bg-white rounded-lg border border-slate-300 text-xs font-semibold focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => addBuyerParty(newBuyerPartyInput)}
+                      className="px-3 py-2 bg-slate-900 text-emerald-400 font-bold rounded-lg text-xs shadow-sm hover:bg-black transition"
+                    >
+                      + Ekle
+                    </button>
+                  </div>
+
+                  {buyerParties.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5 pt-1">
+                      {buyerParties.map((p, idx) => (
+                        <span key={idx} className="inline-flex items-center gap-1.5 bg-white border border-emerald-300 px-2.5 py-1 rounded-md text-xs font-bold text-slate-800 shadow-sm">
+                          {p}
+                          <button type="button" onClick={() => removeBuyerParty(idx)} className="text-red-500 hover:text-red-700">
+                            <X className="w-3.5 h-3.5" />
+                          </button>
+                        </span>
+                      ))}
+                    </div>
+                  )}
                 </div>
 
                 {/* Komisyon */}
@@ -1441,9 +1893,9 @@ export default function RealEstateCalculator() {
                   </div>
                 </div>
 
-                {/* Fatura */}
+                {/* Fatura Durumu & KDV Dahil/Hariç (Madde 4) */}
                 <div className="p-4 bg-slate-50 rounded-xl border border-slate-200/70 space-y-3">
-                  <span className="text-xs font-bold text-slate-800 block">Fatura Durumu</span>
+                  <span className="text-xs font-bold text-slate-800 block">Fatura Seçeneği</span>
                   <div className="grid grid-cols-3 gap-2">
                     <button
                       type="button"
@@ -1468,19 +1920,43 @@ export default function RealEstateCalculator() {
                     </button>
                   </div>
 
-                  {buyerInvoiceType === 'partial' && (
-                    <div className="pt-2">
-                      <label className="block text-xs font-bold text-slate-600 mb-1">Faturalandırılacak Tutar</label>
-                      <div className="relative">
-                        <input
-                          type="text"
-                          value={formatInputDisplay(buyerInvoiceAmount)}
-                          placeholder="0"
-                          onChange={(e) => setBuyerInvoiceAmount(parseInputValue(e.target.value))}
-                          className="w-full p-2 rounded-lg border border-slate-300 text-sm font-bold pr-10 focus:ring-2 focus:ring-emerald-500 focus:outline-none"
-                        />
-                        <span className="absolute right-3 top-2.5 text-slate-400 text-xs font-bold">TL</span>
+                  {buyerInvoiceType !== 'unbilled' && (
+                    <div className="p-3 bg-white rounded-lg border border-slate-200 space-y-3">
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-bold text-slate-700">KDV Hesabı:</span>
+                        <div className="flex gap-1 bg-slate-100 p-1 rounded-lg">
+                          <button
+                            type="button"
+                            onClick={() => setBuyerInvoiceTaxIncluded(false)}
+                            className={`px-2.5 py-1 rounded text-xs font-bold transition ${!buyerInvoiceTaxIncluded ? 'bg-slate-900 text-white shadow-sm' : 'text-slate-500'}`}
+                          >
+                            KDV Hariç (+%20)
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setBuyerInvoiceTaxIncluded(true)}
+                            className={`px-2.5 py-1 rounded text-xs font-bold transition ${buyerInvoiceTaxIncluded ? 'bg-emerald-600 text-white shadow-sm' : 'text-slate-500'}`}
+                          >
+                            KDV Dahil (İçinden düş)
+                          </button>
+                        </div>
                       </div>
+
+                      {buyerInvoiceType === 'partial' && (
+                        <div>
+                          <label className="block text-xs font-bold text-slate-600 mb-1">Faturalandırılacak Tutar</label>
+                          <div className="relative">
+                            <input
+                              type="text"
+                              value={formatInputDisplay(buyerInvoiceAmount)}
+                              placeholder="0"
+                              onChange={(e) => setBuyerInvoiceAmount(parseInputValue(e.target.value))}
+                              className="w-full p-2 rounded-lg border border-slate-300 text-sm font-bold pr-10 focus:ring-2 focus:ring-emerald-500 focus:outline-none"
+                            />
+                            <span className="absolute right-3 top-2.5 text-slate-400 text-xs font-bold">TL</span>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   )}
 
@@ -1490,7 +1966,7 @@ export default function RealEstateCalculator() {
                   </div>
                 </div>
 
-                {/* Ortak Çalışma */}
+                {/* Ortak Çalışma Payı */}
                 <div className="p-4 bg-slate-50 rounded-xl border border-slate-200/70 space-y-3">
                   <label className="flex items-center gap-2 cursor-pointer select-none">
                     <input
@@ -1499,7 +1975,7 @@ export default function RealEstateCalculator() {
                       onChange={(e) => setBuyerHasPartner(e.target.checked)}
                       className="w-4 h-4 rounded text-emerald-600 focus:ring-emerald-500"
                     />
-                    <span className="text-xs font-bold text-slate-800">Ortak Çalışma Payı Düş</span>
+                    <span className="text-xs font-bold text-slate-800">Harici Ortak / Emlakçı Payı Düş</span>
                   </label>
 
                   {buyerHasPartner && (
@@ -1627,7 +2103,7 @@ export default function RealEstateCalculator() {
                   </div>
                 </div>
 
-                {/* Hak Ediş Özeti & Vergi Kesintisi */}
+                {/* Hak Ediş Özeti */}
                 <div className="bg-emerald-50/50 border border-emerald-200 p-4 rounded-xl space-y-2 text-xs">
                   <div className="flex justify-between text-slate-700 font-bold">
                     <span>Brüt Danışman Payı (%{buyerAgentRate}):</span>
@@ -1659,36 +2135,39 @@ export default function RealEstateCalculator() {
               </div>
             </div>
 
-            {/* GELİR - GİDER - NET TABLOSU & PDF BORDROSU */}
-            <div ref={pdfRef} className="bg-white p-8 rounded-2xl shadow-sm border border-slate-200 space-y-6">
-              <div className="flex flex-col sm:flex-row justify-between sm:items-end border-b-2 border-slate-900 pb-4 gap-2">
+            {/* 1 SAYFA A4 BORDRONUN RENDER ALANI (Madde 5) */}
+            <div ref={pdfRef} className="bg-white p-6 md:p-8 rounded-2xl shadow-sm border border-slate-200 space-y-5 print:p-0 print:border-none">
+              <div className="flex flex-col sm:flex-row justify-between sm:items-end border-b-2 border-slate-900 pb-3 gap-2">
                 <div>
-                  <span className="text-xs font-black tracking-widest text-amber-600 uppercase">360 IC - Investor Community</span>
-                  <h2 className="text-2xl font-black text-slate-900 tracking-tight mt-1">İŞLEM VE HAK EDİŞ BORDROSU</h2>
-                  <p className="text-xs text-slate-500 font-bold mt-1">İşlem Tarihi: {new Date(transactionDate).toLocaleDateString('tr-TR')}</p>
+                  <span className="text-xs font-black tracking-widest text-amber-600 uppercase">360 IC - INVESTOR COMMUNITY</span>
+                  <h2 className="text-xl font-black text-slate-900 tracking-tight mt-0.5">İŞLEM VE HAK EDİŞ BORDROSU</h2>
+                  <p className="text-xs text-slate-500 font-bold">İşlem Tarihi: {new Date(transactionDate).toLocaleDateString('tr-TR')}</p>
                 </div>
-                <div className="sm:text-right bg-slate-900 p-4 rounded-xl shadow-md">
-                  <span className="text-xs font-bold text-amber-500 uppercase tracking-wider block">{transactionType} İŞLEM BEDELİ</span>
-                  <p className="text-2xl font-black text-white mt-1">{formatMoney(propertyPrice)}</p>
+                <div className="sm:text-right bg-slate-900 p-3 rounded-xl shadow-sm">
+                  <span className="text-[11px] font-bold text-amber-400 uppercase tracking-wider block">{transactionType} İŞLEM BEDELİ</span>
+                  <p className="text-xl font-black text-white">{formatMoney(propertyPrice)}</p>
                 </div>
               </div>
 
               {/* Taraf Dökümleri */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div className="p-4 bg-slate-50 rounded-xl border border-slate-200 space-y-1.5 text-xs">
-                  <div className="font-black text-slate-900 border-b border-slate-200 pb-2 mb-2 flex justify-between">
-                    <span className="text-amber-600">Satıcı Portföy Tarafı</span>
+                <div className="p-3.5 bg-slate-50 rounded-xl border border-slate-200 space-y-1.5 text-xs">
+                  <div className="font-black text-slate-900 border-b border-slate-200 pb-1.5 mb-1.5 flex justify-between">
+                    <span className="text-amber-600 font-black">{sellerTitle}</span>
                     <span className="font-bold text-slate-500">Temsilci: {selectedSellerAgent ? `[${selectedSellerAgent.code}] ${selectedSellerAgent.full_name}` : 'Atanmadı'}</span>
                   </div>
-                  <div className="flex justify-between"><span>Müşteri:</span><b className="text-slate-800">{sellerName || '-'}</b></div>
+                  <div className="flex justify-between">
+                    <span>Müşteri(ler):</span>
+                    <b className="text-slate-800">{allSellerNames.join(', ') || '-'}</b>
+                  </div>
                   <div className="flex justify-between"><span>Komisyon Matrahı:</span><b className="text-slate-800">{formatMoney(sellerBaseComm)}</b></div>
                   <div className="flex justify-between"><span>Fatura KDV:</span><b className="text-slate-800">{formatMoney(sellerTaxAmount)}</b></div>
                   {sellerTaxDeduction > 0 && (
                     <div className="flex justify-between text-amber-900 font-bold"><span>Gelir Vergisi Kesintisi (%25):</span><b>- {formatMoney(sellerTaxDeduction)}</b></div>
                   )}
                   {sellerExpenses.length > 0 && (
-                    <div className="pt-2 mt-1 border-t border-slate-200 text-slate-600">
-                      <span className="font-bold block mb-1">Düşülen Masraflar:</span>
+                    <div className="pt-1 mt-1 border-t border-slate-200 text-slate-600">
+                      <span className="font-bold block mb-0.5">Düşülen Masraflar:</span>
                       {sellerExpenses.map((e, idx) => (
                         <div key={idx} className="flex justify-between text-[11px] pl-2 text-slate-500 font-medium">
                           <span>• {e.custom_description || 'Gider'}:</span>
@@ -1697,26 +2176,29 @@ export default function RealEstateCalculator() {
                       ))}
                     </div>
                   )}
-                  <div className="flex justify-between text-amber-700 font-black pt-2 mt-1 border-t border-slate-200 text-sm">
+                  <div className="flex justify-between text-amber-700 font-black pt-1.5 mt-1 border-t border-slate-200 text-sm">
                     <span>Temsilci Net Hak Ediş:</span>
                     <span>{formatMoney(sellerAgentNet)}</span>
                   </div>
                 </div>
 
-                <div className="p-4 bg-slate-50 rounded-xl border border-slate-200 space-y-1.5 text-xs">
-                  <div className="font-black text-slate-900 border-b border-slate-200 pb-2 mb-2 flex justify-between">
-                    <span className="text-emerald-600">Alıcı Müşteri Tarafı</span>
+                <div className="p-3.5 bg-slate-50 rounded-xl border border-slate-200 space-y-1.5 text-xs">
+                  <div className="font-black text-slate-900 border-b border-slate-200 pb-1.5 mb-1.5 flex justify-between">
+                    <span className="text-emerald-600 font-black">{buyerTitle}</span>
                     <span className="font-bold text-slate-500">Temsilci: {selectedBuyerAgent ? `[${selectedBuyerAgent.code}] ${selectedBuyerAgent.full_name}` : 'Atanmadı'}</span>
                   </div>
-                  <div className="flex justify-between"><span>Müşteri:</span><b className="text-slate-800">{buyerName || '-'}</b></div>
+                  <div className="flex justify-between">
+                    <span>Müşteri(ler):</span>
+                    <b className="text-slate-800">{allBuyerNames.join(', ') || '-'}</b>
+                  </div>
                   <div className="flex justify-between"><span>Komisyon Matrahı:</span><b className="text-slate-800">{formatMoney(buyerBaseComm)}</b></div>
                   <div className="flex justify-between"><span>Fatura KDV:</span><b className="text-slate-800">{formatMoney(buyerTaxAmount)}</b></div>
                   {buyerTaxDeduction > 0 && (
                     <div className="flex justify-between text-emerald-900 font-bold"><span>Gelir Vergisi Kesintisi (%25):</span><b>- {formatMoney(buyerTaxDeduction)}</b></div>
                   )}
                   {buyerExpenses.length > 0 && (
-                    <div className="pt-2 mt-1 border-t border-slate-200 text-slate-600">
-                      <span className="font-bold block mb-1">Düşülen Masraflar:</span>
+                    <div className="pt-1 mt-1 border-t border-slate-200 text-slate-600">
+                      <span className="font-bold block mb-0.5">Düşülen Masraflar:</span>
                       {buyerExpenses.map((e, idx) => (
                         <div key={idx} className="flex justify-between text-[11px] pl-2 text-slate-500 font-medium">
                           <span>• {e.custom_description || 'Gider'}:</span>
@@ -1725,7 +2207,7 @@ export default function RealEstateCalculator() {
                       ))}
                     </div>
                   )}
-                  <div className="flex justify-between text-emerald-700 font-black pt-2 mt-1 border-t border-slate-200 text-sm">
+                  <div className="flex justify-between text-emerald-700 font-black pt-1.5 mt-1 border-t border-slate-200 text-sm">
                     <span>Temsilci Net Hak Ediş:</span>
                     <span>{formatMoney(buyerAgentNet)}</span>
                   </div>
@@ -1734,27 +2216,27 @@ export default function RealEstateCalculator() {
 
               {/* Genel Mali Tablo */}
               <div className="border border-slate-300 rounded-xl overflow-hidden shadow-sm">
-                <div className="bg-slate-900 text-amber-500 p-3 font-black text-xs uppercase tracking-wider flex items-center gap-2">
+                <div className="bg-slate-900 text-amber-500 p-2.5 font-black text-xs uppercase tracking-wider flex items-center gap-2">
                   <Scale className="w-4 h-4" />
                   Mali Hesap Özeti & Net Kasa Dağılımı
                 </div>
 
-                <div className="p-5 space-y-5 bg-white">
+                <div className="p-4 space-y-4 bg-white">
                   <div>
-                    <div className="flex items-center gap-2 text-emerald-700 font-black text-xs uppercase tracking-wider mb-2">
+                    <div className="flex items-center gap-1.5 text-emerald-700 font-black text-xs uppercase tracking-wider mb-1.5">
                       <TrendingUp className="w-4 h-4" />
                       Brüt Kasa Girişi (Tahsil Edilen)
                     </div>
-                    <div className="bg-emerald-50/50 rounded-lg p-3 space-y-1.5 text-xs border border-emerald-100 font-bold">
+                    <div className="bg-emerald-50/50 rounded-lg p-2.5 space-y-1 text-xs border border-emerald-100 font-bold">
                       <div className="flex justify-between text-slate-700">
-                        <span>Satıcı Komisyon + KDV:</span>
+                        <span>{sellerTitle} Komisyon + KDV:</span>
                         <span>{formatMoney(sellerTotalGross)}</span>
                       </div>
                       <div className="flex justify-between text-slate-700">
-                        <span>Alıcı Komisyon + KDV:</span>
+                        <span>{buyerTitle} Komisyon + KDV:</span>
                         <span>{formatMoney(buyerTotalGross)}</span>
                       </div>
-                      <div className="flex justify-between text-slate-900 font-black pt-1.5 border-t border-emerald-200 text-sm">
+                      <div className="flex justify-between text-slate-900 font-black pt-1 border-t border-emerald-200 text-sm">
                         <span>TOPLAM BRÜT KASA GELİRİ:</span>
                         <span className="text-emerald-700">{formatMoney(totalGrossCollection)}</span>
                       </div>
@@ -1762,21 +2244,21 @@ export default function RealEstateCalculator() {
                   </div>
 
                   <div>
-                    <div className="flex items-center gap-2 text-red-700 font-black text-xs uppercase tracking-wider mb-2">
+                    <div className="flex items-center gap-1.5 text-red-700 font-black text-xs uppercase tracking-wider mb-1.5">
                       <TrendingDown className="w-4 h-4" />
                       Kasa Çıkışları (Hak Ediş, Gider ve Vergi)
                     </div>
-                    <div className="bg-red-50/50 rounded-lg p-3 space-y-1.5 text-xs border border-red-100 font-bold">
+                    <div className="bg-red-50/50 rounded-lg p-2.5 space-y-1 text-xs border border-red-100 font-bold">
                       <div className="flex justify-between text-slate-700">
-                        <span>Temsilci Net Hak Edişleri Toplamı:</span>
+                        <span>Temsilci Net Hak Edişleri:</span>
                         <span className="text-red-600">- {formatMoney(totalAgentEarnings)}</span>
                       </div>
                       <div className="flex justify-between text-slate-700">
-                        <span>Fatura Gelir Vergisi Kesintileri (%25 Stopaj):</span>
+                        <span>Fatura Gelir Vergisi Kesintileri (%25):</span>
                         <span className="text-red-600">- {formatMoney(totalTaxDeductions)}</span>
                       </div>
                       <div className="flex justify-between text-slate-700">
-                        <span>Ortak Çalışma Payları:</span>
+                        <span>Harici Ortak Çalışma Payları:</span>
                         <span className="text-red-600">- {formatMoney(totalPartnerShares)}</span>
                       </div>
                       <div className="flex justify-between text-slate-700">
@@ -1787,20 +2269,20 @@ export default function RealEstateCalculator() {
                         <span>Devlete Aktarılacak KDV Tutarı:</span>
                         <span className="text-red-600">- {formatMoney(totalTaxAmount)}</span>
                       </div>
-                      <div className="flex justify-between text-slate-900 font-black pt-1.5 border-t border-red-200 text-sm">
+                      <div className="flex justify-between text-slate-900 font-black pt-1 border-t border-red-200 text-sm">
                         <span>TOPLAM KASA ÇIKIŞI:</span>
                         <span className="text-red-700">- {formatMoney(grandTotalDeductions)}</span>
                       </div>
                     </div>
                   </div>
 
-                  <div className="bg-slate-900 text-white rounded-xl p-5 flex justify-between items-center shadow-lg border border-slate-700">
+                  <div className="bg-slate-900 text-white rounded-xl p-4 flex justify-between items-center shadow border border-slate-700">
                     <div>
                       <span className="text-xs text-amber-500 font-black uppercase tracking-wider block">360 IC - ŞİRKET NET KAZANCI</span>
-                      <p className="text-[11px] text-slate-400 font-medium mt-0.5">Tüm hak ediş ve kesintiler düşüldükten sonra kalan ofis payı</p>
+                      <p className="text-[10px] text-slate-400 font-medium mt-0.5">Tüm hak ediş ve kesintiler sonrası ofis payı</p>
                     </div>
                     <div className="text-right">
-                      <span className="text-2xl font-black text-white">{formatMoney(totalOfficeNetIncome)}</span>
+                      <span className="text-xl font-black text-white">{formatMoney(totalOfficeNetIncome)}</span>
                     </div>
                   </div>
                 </div>
@@ -1809,29 +2291,359 @@ export default function RealEstateCalculator() {
           </div>
         )}
 
-        {/* 2. SEKME: RAPORLAR, GRAFİKLER & TEMSİLCİ PERFORMANSI */}
+        {/* 2. SEKME: HEDEF BELİRLE & TAKİP (Madde 8) */}
+        {activeTab === 'targets' && (
+          <div className="space-y-6">
+            <div className="bg-white p-6 rounded-2xl shadow-sm border-t-4 border-amber-500 space-y-6">
+              <div>
+                <h2 className="text-base font-black text-slate-900 flex items-center gap-2">
+                  <Target className="w-5 h-5 text-amber-600" />
+                  Danışman Hedef Atama & Prim Yönetimi
+                </h2>
+                <p className="text-xs text-slate-500 font-medium mt-0.5">Danışmanlarınıza aylık veya 3 aylık işlem hedefleri tanımlayın; sistem gerçekleşen adetleri otomatik takip edip ek hak edişlerini hesaplasın.</p>
+              </div>
+
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                
+                {/* Sol: Hedef Atama Formu */}
+                <div className="lg:col-span-2 bg-slate-50 p-5 rounded-2xl border border-slate-200 space-y-4">
+                  <div className="flex justify-between items-center border-b pb-2">
+                    <span className="text-xs font-black text-slate-800 uppercase tracking-wider">🎯 Yeni Hedef Tanımla</span>
+                    {targetTemplates.length > 0 && (
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-[11px] text-slate-500 font-bold">Hazır Paket:</span>
+                        <select
+                          value={selectedTemplateId}
+                          onChange={(e) => handleSelectTemplate(e.target.value)}
+                          className="p-1 border border-slate-300 rounded text-xs font-bold bg-white"
+                        >
+                          <option value="">Manuel / Şablon Seç</option>
+                          {targetTemplates.map(tpl => (
+                            <option key={tpl.id} value={tpl.id}>{tpl.title}</option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                    <div>
+                      <label className="block font-bold text-slate-700 mb-1">Hedef Başlığı</label>
+                      <input
+                        type="text"
+                        placeholder="Örn: 2026 Q3 Satış Rallisi"
+                        value={targetTitle}
+                        onChange={(e) => setTargetTitle(e.target.value)}
+                        className="w-full p-2.5 rounded-lg border border-slate-300 bg-white font-bold"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block font-bold text-slate-700 mb-1">Hedef Atanacak Danışman</label>
+                      <select
+                        value={targetAgentId}
+                        onChange={(e) => setTargetAgentId(e.target.value)}
+                        className="w-full p-2.5 rounded-lg border border-slate-300 bg-white font-bold"
+                      >
+                        <option value="">Danışman Seçin</option>
+                        {activeAgents.map(a => (
+                          <option key={a.id} value={a.id}>[{a.code}] {a.full_name} ({a.office_name || 'Merkez'})</option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block font-bold text-slate-700 mb-1">Hedef İşlem Türü</label>
+                      <select
+                        value={targetType}
+                        onChange={(e) => setTargetType(e.target.value as any)}
+                        className="w-full p-2.5 rounded-lg border border-slate-300 bg-white font-bold"
+                      >
+                        <option value="SATIŞ">🏢 Satış İşlemleri</option>
+                        <option value="KİRALAMA">🔑 Kiralama İşlemleri</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block font-bold text-slate-700 mb-1">Periyot Türü</label>
+                      <select
+                        value={targetPeriod}
+                        onChange={(e) => setTargetPeriod(e.target.value as any)}
+                        className="w-full p-2.5 rounded-lg border border-slate-300 bg-white font-bold"
+                      >
+                        <option value="AYLIK">Aylık Hedef</option>
+                        <option value="3_AYLIK">3 Aylık (Çeyrek / Quarter)</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block font-bold text-slate-700 mb-1">Başlangıç Tarihi</label>
+                      <input
+                        type="date"
+                        value={targetStartDate}
+                        onChange={(e) => setTargetStartDate(e.target.value)}
+                        className="w-full p-2 rounded-lg border border-slate-300 bg-white font-bold"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block font-bold text-slate-700 mb-1">Bitiş Tarihi</label>
+                      <input
+                        type="date"
+                        value={targetEndDate}
+                        onChange={(e) => setTargetEndDate(e.target.value)}
+                        className="w-full p-2 rounded-lg border border-slate-300 bg-white font-bold"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block font-bold text-slate-700 mb-1">Hedeflenen İşlem Adedi</label>
+                      <input
+                        type="number"
+                        value={targetCount || ''}
+                        onChange={(e) => setTargetCount(Number(e.target.value))}
+                        className="w-full p-2 rounded-lg border border-slate-300 bg-white font-bold"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block font-bold text-slate-700 mb-1">Ödül Türü & Değeri</label>
+                      <div className="flex gap-2">
+                        <select
+                          value={targetRewardType}
+                          onChange={(e) => setTargetRewardType(e.target.value as any)}
+                          className="w-1/2 p-2 rounded-lg border border-slate-300 bg-white font-bold"
+                        >
+                          <option value="PERCENT">+% Prim Oranı</option>
+                          <option value="FIXED">Sabit TL Bonus</option>
+                        </select>
+                        <div className="relative w-1/2">
+                          <input
+                            type="text"
+                            value={targetRewardType === 'PERCENT' ? targetRewardValue : formatInputDisplay(targetRewardValue)}
+                            onChange={(e) => setTargetRewardValue(targetRewardType === 'PERCENT' ? Number(e.target.value) : parseInputValue(e.target.value))}
+                            className="w-full p-2 rounded-lg border border-slate-300 bg-white font-black pr-8"
+                          />
+                          <span className="absolute right-2.5 top-2 text-xs font-bold text-slate-400">
+                            {targetRewardType === 'PERCENT' ? '%' : 'TL'}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={handleAssignTarget}
+                    className="w-full py-2.5 bg-slate-900 hover:bg-black text-amber-400 rounded-xl font-black text-xs shadow transition flex items-center justify-center gap-1.5"
+                  >
+                    <Plus className="w-4 h-4" /> Hedefi Danışmana Ata
+                  </button>
+                </div>
+
+                {/* Sağ: Standart Şablon Kaydetme */}
+                <div className="bg-slate-50 p-5 rounded-2xl border border-slate-200 space-y-3">
+                  <span className="text-xs font-black text-slate-800 uppercase tracking-wider block">📦 Hazır Hedef Şablonu Kaydet</span>
+                  <p className="text-[11px] text-slate-500">Sık kullandığınız standart hedef paketlerini kaydedip tek tıkla atayabilirsiniz.</p>
+
+                  <div className="space-y-2 text-xs">
+                    <input
+                      type="text"
+                      placeholder="Şablon Adı (Örn: Yıldız Kiralama)"
+                      value={newTplTitle}
+                      onChange={(e) => setNewTplTitle(e.target.value)}
+                      className="w-full p-2 rounded-lg border border-slate-300 bg-white font-bold"
+                    />
+                    <div className="grid grid-cols-2 gap-2">
+                      <select
+                        value={newTplType}
+                        onChange={(e) => setNewTplType(e.target.value as any)}
+                        className="p-2 rounded-lg border border-slate-300 bg-white font-bold"
+                      >
+                        <option value="SATIŞ">Satış</option>
+                        <option value="KİRALAMA">Kiralama</option>
+                      </select>
+                      <select
+                        value={newTplPeriod}
+                        onChange={(e) => setNewTplPeriod(e.target.value as any)}
+                        className="p-2 rounded-lg border border-slate-300 bg-white font-bold"
+                      >
+                        <option value="AYLIK">Aylık</option>
+                        <option value="3_AYLIK">3 Aylık</option>
+                      </select>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2">
+                      <input
+                        type="number"
+                        placeholder="Hedef Adet (3)"
+                        value={newTplCount || ''}
+                        onChange={(e) => setNewTplCount(Number(e.target.value))}
+                        className="p-2 rounded-lg border border-slate-300 bg-white font-bold"
+                      />
+                      <div className="relative">
+                        <input
+                          type="text"
+                          placeholder="Ödül Değeri"
+                          value={newTplRewardType === 'PERCENT' ? newTplRewardValue : formatInputDisplay(newTplRewardValue)}
+                          onChange={(e) => setNewTplRewardValue(newTplRewardType === 'PERCENT' ? Number(e.target.value) : parseInputValue(e.target.value))}
+                          className="w-full p-2 rounded-lg border border-slate-300 bg-white font-black pr-8"
+                        />
+                        <span className="absolute right-2 top-2 text-[10px] font-bold text-slate-400">
+                          {newTplRewardType === 'PERCENT' ? '%' : 'TL'}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={handleSaveTemplate}
+                    className="w-full py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-lg font-bold text-xs shadow transition"
+                  >
+                    + Şablonu Kaydet
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* Aktif & Sonuçlanan Hedefler Tablosu */}
+            <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 space-y-4">
+              <div className="flex justify-between items-center border-b pb-3">
+                <h3 className="text-base font-black text-slate-900 flex items-center gap-2">
+                  <Briefcase className="w-5 h-5 text-amber-600" />
+                  Hedef Takip & Hak Ediş Listesi ({evaluatedAgentTargets.length})
+                </h3>
+              </div>
+
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs border-collapse">
+                  <thead>
+                    <tr className="bg-slate-900 text-amber-500 font-black border-b border-slate-700">
+                      <th className="p-3.5 rounded-tl-lg">Danışman & Ofis</th>
+                      <th className="p-3.5">Hedef Tanımı</th>
+                      <th className="p-3.5">Periyot</th>
+                      <th className="p-3.5 text-center">Hedef / Gerçekleşen</th>
+                      <th className="p-3.5">Durum</th>
+                      <th className="p-3.5 text-emerald-400">Hak Edilen Ödül / Bonus</th>
+                      <th className="p-3.5 text-right rounded-tr-lg">Ödeme / İşlem</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-200 bg-slate-50">
+                    {evaluatedAgentTargets.map(tgt => (
+                      <tr key={tgt.id} className="hover:bg-amber-50/60 transition">
+                        <td className="p-3.5">
+                          <span className="font-black text-slate-900 block">{tgt.agent_name}</span>
+                          <span className="text-[10px] text-slate-400 font-bold">{tgt.agent_office}</span>
+                        </td>
+                        <td className="p-3.5">
+                          <span className="font-bold text-slate-900 block">{tgt.title}</span>
+                          <span className="text-[10px] font-semibold text-amber-700">
+                            {tgt.target_type} • Ödül: {tgt.reward_type === 'PERCENT' ? `+%${tgt.reward_value} Prim` : formatMoney(tgt.reward_value)}
+                          </span>
+                        </td>
+                        <td className="p-3.5 text-slate-600 font-medium">
+                          {new Date(tgt.start_date).toLocaleDateString('tr-TR')} - {new Date(tgt.end_date).toLocaleDateString('tr-TR')}
+                        </td>
+                        <td className="p-3.5 text-center">
+                          <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-slate-200 font-black text-xs">
+                            <span className={tgt.isTargetMet ? 'text-emerald-700' : 'text-slate-900'}>{tgt.achievedCount}</span>
+                            <span className="text-slate-400">/</span>
+                            <span>{tgt.target_count} Adet</span>
+                          </div>
+                        </td>
+                        <td className="p-3.5">
+                          {tgt.isTargetMet ? (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-100 text-emerald-800 font-black text-[11px]">
+                              <Check className="w-3.5 h-3.5" /> HEDEF TUTTU
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-amber-100 text-amber-800 font-bold text-[11px]">
+                              <Clock className="w-3.5 h-3.5" /> Devam Ediyor
+                            </span>
+                          )}
+                        </td>
+                        <td className="p-3.5 font-black text-sm">
+                          {tgt.isTargetMet ? (
+                            <span className="text-emerald-700">+{formatMoney(tgt.calculatedBonus)}</span>
+                          ) : (
+                            <span className="text-slate-400 text-xs">Hedef Bekleniyor</span>
+                          )}
+                        </td>
+                        <td className="p-3.5 text-right space-x-2">
+                          {tgt.isTargetMet && (
+                            <button
+                              onClick={() => toggleTargetPaid(tgt.id, tgt.is_paid)}
+                              className={`px-2.5 py-1.5 rounded-lg text-xs font-black shadow transition ${tgt.is_paid ? 'bg-slate-200 text-slate-700 hover:bg-slate-300' : 'bg-emerald-600 text-white hover:bg-emerald-700'}`}
+                            >
+                              {tgt.is_paid ? '✓ Ödendi (Kapatıldı)' : 'Ödemeyi Onayla & Kapat'}
+                            </button>
+                          )}
+                          <button
+                            onClick={() => handleDeleteTarget(tgt.id)}
+                            className="p-1.5 text-red-500 hover:text-red-700 bg-red-50 rounded"
+                            title="Hedefi Sil"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* 3. SEKME: RAPORLAR, GRAFİKLER & TEMSİLCİ PERFORMANSI (Madde 6 & 7) */}
         {activeTab === 'analytics' && (
           <div className="space-y-6">
+            {/* Filtre Barı: Ofis + Temsilci + Tarih */}
             <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-200 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-              <div className="flex items-center gap-3">
-                <div className="p-2 bg-slate-900 text-amber-500 rounded-xl">
-                  <UserCheck className="w-5 h-5" />
+              <div className="flex flex-wrap items-center gap-4">
+                {/* Ofis Filtresi (Madde 6) */}
+                <div className="flex items-center gap-2">
+                  <div className="p-2 bg-slate-900 text-amber-500 rounded-xl">
+                    <Building2 className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider block">Ofis / Şube</label>
+                    <select
+                      value={selectedOfficeFilter}
+                      onChange={(e) => setSelectedOfficeFilter(e.target.value)}
+                      className="p-1 pl-0 bg-transparent font-black text-xs text-slate-900 border-b border-slate-300 focus:outline-none focus:border-amber-500 cursor-pointer"
+                    >
+                      <option value="all">🏢 TÜM OFİSLER</option>
+                      {officeList.map(off => (
+                        <option key={off} value={off}>{off}</option>
+                      ))}
+                    </select>
+                  </div>
                 </div>
-                <div>
-                  <label className="text-[11px] font-black text-slate-400 uppercase tracking-wider block">Temsilci / Danışman Filtresi</label>
-                  <select
-                    value={selectedAgentFilter}
-                    onChange={(e) => setSelectedAgentFilter(e.target.value)}
-                    className="p-1.5 pl-0 bg-transparent font-black text-sm text-slate-900 border-b border-slate-300 focus:outline-none focus:border-amber-500 cursor-pointer"
-                  >
-                    <option value="all">🌟 TÜM OFİS & DANIŞMANLAR</option>
-                    {agents.map(a => (
-                      <option key={a.id} value={a.id}>👤 [{a.code}] {a.full_name} {a.is_active === false ? '(Pasif)' : ''}</option>
-                    ))}
-                  </select>
+
+                {/* Temsilci Filtresi */}
+                <div className="flex items-center gap-2">
+                  <div className="p-2 bg-slate-900 text-amber-500 rounded-xl">
+                    <UserCheck className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider block">Danışman</label>
+                    <select
+                      value={selectedAgentFilter}
+                      onChange={(e) => setSelectedAgentFilter(e.target.value)}
+                      className="p-1 pl-0 bg-transparent font-black text-xs text-slate-900 border-b border-slate-300 focus:outline-none focus:border-amber-500 cursor-pointer"
+                    >
+                      <option value="all">🌟 TÜM DANIŞMANLAR</option>
+                      {agents.map(a => (
+                        <option key={a.id} value={a.id}>👤 [{a.code}] {a.full_name}</option>
+                      ))}
+                    </select>
+                  </div>
                 </div>
               </div>
 
+              {/* Tarih Filtreleri */}
               <div className="flex flex-wrap items-center gap-2">
                 <button
                   onClick={() => setDateFilter('all')}
@@ -1899,18 +2711,18 @@ export default function RealEstateCalculator() {
                   {selectedAgentFilter === 'all' ? 'Toplam Brüt Gelir (Kasa)' : 'Temsilci Brüt Hacmi'}
                 </span>
                 <div className="text-2xl font-black text-slate-900 mt-1">{formatMoney(analyticsSummary.totalGrossVolume)}</div>
-                <span className="text-[11px] text-slate-400 font-medium mt-1 block">Tahsil edilen komisyon + vergi</span>
+                <span className="text-[11px] text-slate-400 font-medium mt-1 block">Komisyon + Vergi Hacmi</span>
               </div>
 
               {selectedAgentFilter !== 'all' ? (
                 <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-200 border-l-4 border-l-amber-600">
                   <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider block">Temsilci Net Hak Edişi</span>
                   <div className="text-2xl font-black text-amber-600 mt-1">{formatMoney(analyticsSummary.totalAgentNetEarnings)}</div>
-                  <span className="text-[11px] text-slate-400 font-medium mt-1 block">Vergi, gider ve ortaklıklar sonrası</span>
+                  <span className="text-[11px] text-slate-400 font-medium mt-1 block">Vergi ve giderler düşülmüş</span>
                 </div>
               ) : (
                 <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-200 border-l-4 border-l-purple-500">
-                  <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider block">Kayıtlı Portföy / Rehber</span>
+                  <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider block">Portföy / Kişi Rehberi</span>
                   <div className="text-3xl font-black text-slate-900 mt-1">{contacts.length}</div>
                   <span className="text-[11px] text-slate-400 font-medium mt-1 block">Müşteri ve Harici Ortaklar</span>
                 </div>
@@ -1925,7 +2737,7 @@ export default function RealEstateCalculator() {
               </div>
             </div>
 
-            {/* Grafikler */}
+            {/* Üst Grafikler: Ofis Akışı & Satış/Kira Dağılımı */}
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
               <div className="lg:col-span-2 bg-white p-6 rounded-2xl shadow-sm border border-slate-200 space-y-4">
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-slate-100 pb-3 gap-2">
@@ -1938,21 +2750,18 @@ export default function RealEstateCalculator() {
                     <button
                       onClick={() => setChartType('bar')}
                       className={`flex items-center gap-1 px-2.5 py-1 text-xs font-bold rounded-md transition ${chartType === 'bar' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-800'}`}
-                      title="Çubuk Grafik"
                     >
                       <BarChart2 className="w-3.5 h-3.5" /> Çubuk
                     </button>
                     <button
                       onClick={() => setChartType('area')}
                       className={`flex items-center gap-1 px-2.5 py-1 text-xs font-bold rounded-md transition ${chartType === 'area' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-800'}`}
-                      title="Alan Grafik"
                     >
                       <Activity className="w-3.5 h-3.5" /> Alan
                     </button>
                     <button
                       onClick={() => setChartType('line')}
                       className={`flex items-center gap-1 px-2.5 py-1 text-xs font-bold rounded-md transition ${chartType === 'line' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-800'}`}
-                      title="Çizgi Grafik"
                     >
                       <LineChartIcon className="w-3.5 h-3.5" /> Çizgi
                     </button>
@@ -1970,28 +2779,15 @@ export default function RealEstateCalculator() {
                           <Tooltip formatter={(value: any) => formatMoney(Number(value))} />
                           <Bar dataKey="gross" name="Brüt Hacim" fill="#d97706" radius={[4, 4, 0, 0]} />
                           <Bar dataKey="net" name="Şirket Net Payı" fill="#10b981" radius={[4, 4, 0, 0]} />
-                          {selectedAgentFilter !== 'all' && (
-                            <Bar dataKey="agentEarn" name="Temsilci Net Hak Ediş" fill="#3b82f6" radius={[4, 4, 0, 0]} />
-                          )}
                         </BarChart>
                       ) : chartType === 'area' ? (
                         <AreaChart data={analyticsSummary.chartTimelineData}>
-                          <defs>
-                            <linearGradient id="grossGrad" x1="0" y1="0" x2="0" y2="1">
-                              <stop offset="5%" stopColor="#d97706" stopOpacity={0.4}/>
-                              <stop offset="95%" stopColor="#d97706" stopOpacity={0}/>
-                            </linearGradient>
-                            <linearGradient id="netGrad" x1="0" y1="0" x2="0" y2="1">
-                              <stop offset="5%" stopColor="#10b981" stopOpacity={0.4}/>
-                              <stop offset="95%" stopColor="#10b981" stopOpacity={0}/>
-                            </linearGradient>
-                          </defs>
                           <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
                           <XAxis dataKey="dateLabel" fontSize={11} stroke="#94a3b8" />
                           <YAxis fontSize={10} stroke="#94a3b8" tickFormatter={(v) => `${v / 1000}k`} />
                           <Tooltip formatter={(value: any) => formatMoney(Number(value))} />
-                          <Area type="monotone" dataKey="gross" name="Brüt Hacim" stroke="#d97706" fillOpacity={1} fill="url(#grossGrad)" strokeWidth={2} />
-                          <Area type="monotone" dataKey="net" name="Şirket Net Payı" stroke="#10b981" fillOpacity={1} fill="url(#netGrad)" strokeWidth={2} />
+                          <Area type="monotone" dataKey="gross" name="Brüt Hacim" stroke="#d97706" fill="#d97706" fillOpacity={0.2} strokeWidth={2} />
+                          <Area type="monotone" dataKey="net" name="Şirket Net Payı" stroke="#10b981" fill="#10b981" fillOpacity={0.2} strokeWidth={2} />
                         </AreaChart>
                       ) : (
                         <LineChart data={analyticsSummary.chartTimelineData}>
@@ -2001,9 +2797,6 @@ export default function RealEstateCalculator() {
                           <Tooltip formatter={(value: any) => formatMoney(Number(value))} />
                           <Line type="monotone" dataKey="gross" name="Brüt Hacim" stroke="#d97706" strokeWidth={3} dot={{ r: 4 }} />
                           <Line type="monotone" dataKey="net" name="Şirket Net Payı" stroke="#10b981" strokeWidth={3} dot={{ r: 4 }} />
-                          {selectedAgentFilter !== 'all' && (
-                            <Line type="monotone" dataKey="agentEarn" name="Temsilci Net Hak Ediş" stroke="#3b82f6" strokeWidth={2} strokeDasharray="5 5" />
-                          )}
                         </LineChart>
                       )}
                     </ResponsiveContainer>
@@ -2021,7 +2814,7 @@ export default function RealEstateCalculator() {
                     İşlem Türü Dağılımı
                   </h3>
                 </div>
-                <div className="h-56 w-full flex items-center justify-center">
+                <div className="h-64 w-full flex items-center justify-center">
                   {analyticsSummary.totalTransactions > 0 ? (
                     <ResponsiveContainer width="100%" height="100%">
                       <PieChart>
@@ -2031,9 +2824,9 @@ export default function RealEstateCalculator() {
                           nameKey="name"
                           cx="50%"
                           cy="50%"
-                          outerRadius={75}
+                          outerRadius={80}
                           label={({ name, percent }: { name?: string; percent?: number }) => `${name ?? ''} (%${((percent ?? 0) * 100).toFixed(0)})`}
-                          fontSize={10}
+                          fontSize={11}
                         >
                           {analyticsSummary.pieData.map((_, index) => (
                             <Cell key={`cell-${index}`} fill={PIE_COLORS[index % PIE_COLORS.length]} />
@@ -2047,6 +2840,88 @@ export default function RealEstateCalculator() {
                   )}
                 </div>
               </div>
+            </div>
+
+            {/* 7. MADDE: İLK 3 DANIŞMAN YAN YANA ÇİZGİ GRAFİKLERİ */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              
+              {/* 1. Grafik: İşlem Sayısı Bazında İlk 3 Danışman */}
+              <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 space-y-3">
+                <div className="border-b border-slate-100 pb-3 flex justify-between items-center">
+                  <div>
+                    <h3 className="text-sm font-black text-slate-900 flex items-center gap-2">
+                      <TrendingUp className="w-4 h-4 text-amber-500" />
+                      İşlem Sayısı Bazında İlk 3 Danışman (Yılbaşından İtibaren)
+                    </h3>
+                    <p className="text-[11px] text-slate-400">Bulunulan yıl içerisindeki aylık işlem performansı</p>
+                  </div>
+                </div>
+
+                <div className="h-64 w-full pt-2">
+                  {analyticsSummary.top3CountAgents.length > 0 ? (
+                    <ResponsiveContainer width="100%" height="100%">
+                      <LineChart data={analyticsSummary.top3CountTimeline}>
+                        <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                        <XAxis dataKey="month" fontSize={11} stroke="#94a3b8" />
+                        <YAxis fontSize={11} stroke="#94a3b8" />
+                        <Tooltip />
+                        <Legend wrapperStyle={{ fontSize: '11px', paddingTop: '10px' }} />
+                        {analyticsSummary.top3CountAgents.map((ag, i) => (
+                          <Line
+                            key={ag.id}
+                            type="monotone"
+                            dataKey={ag.name}
+                            stroke={TOP3_COLORS[i % TOP3_COLORS.length]}
+                            strokeWidth={3}
+                            dot={{ r: 4 }}
+                          />
+                        ))}
+                      </LineChart>
+                    </ResponsiveContainer>
+                  ) : (
+                    <div className="h-full flex items-center justify-center text-xs text-slate-400">Yeterli veri bulunamadı.</div>
+                  )}
+                </div>
+              </div>
+
+              {/* 2. Grafik: Ciro / Hacim Bazında İlk 3 Danışman */}
+              <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 space-y-3">
+                <div className="border-b border-slate-100 pb-3 flex justify-between items-center">
+                  <div>
+                    <h3 className="text-sm font-black text-slate-900 flex items-center gap-2">
+                      <Award className="w-4 h-4 text-blue-500" />
+                      Ciro / Komisyon Bazında İlk 3 Danışman (Yılbaşından İtibaren)
+                    </h3>
+                    <p className="text-[11px] text-slate-400">Bulunulan yıl içerisindeki aylık ciro performansı</p>
+                  </div>
+                </div>
+
+                <div className="h-64 w-full pt-2">
+                  {analyticsSummary.top3GrossAgents.length > 0 ? (
+                    <ResponsiveContainer width="100%" height="100%">
+                      <LineChart data={analyticsSummary.top3GrossTimeline}>
+                        <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                        <XAxis dataKey="month" fontSize={11} stroke="#94a3b8" />
+                        <YAxis fontSize={10} stroke="#94a3b8" tickFormatter={(v) => `${v / 1000}k`} />
+                        <Tooltip formatter={(value: any) => formatMoney(Number(value))} />
+                        <Legend wrapperStyle={{ fontSize: '11px', paddingTop: '10px' }} />
+                        {analyticsSummary.top3GrossAgents.map((ag, i) => (
+                          <Line
+                            key={ag.id}
+                            type="monotone"
+                            dataKey={ag.name}
+                            stroke={TOP3_COLORS[i % TOP3_COLORS.length]}
+                            strokeWidth={3}
+                            dot={{ r: 4 }}
+                          />
+                        ))}
+                      </LineChart>
+                    </ResponsiveContainer>
+                  ) : (
+                    <div className="h-full flex items-center justify-center text-xs text-slate-400">Yeterli veri bulunamadı.</div>
+                  )}
+                </div>
+              </div>
 
             </div>
 
@@ -2056,7 +2931,7 @@ export default function RealEstateCalculator() {
                 <div className="flex items-center justify-between border-b border-slate-100 pb-3">
                   <h3 className="text-sm font-black text-slate-900 flex items-center gap-2">
                     <Award className="w-4 h-4 text-amber-500" />
-                    Danışman Performans Sıralaması (İşlem Adedi & Net Hak Ediş)
+                    Tüm Danışman Performans Sıralaması
                   </h3>
                 </div>
 
@@ -2073,7 +2948,7 @@ export default function RealEstateCalculator() {
                         </span>
                         <div>
                           <span className="font-bold text-slate-900 block">{ag.name}</span>
-                          <span className="text-[10px] text-slate-500 font-semibold">Temsilci Net: {formatMoney(ag.agentNet)}</span>
+                          <span className="text-[10px] text-slate-500 font-semibold">{ag.office} • Temsilci Net: {formatMoney(ag.agentNet)}</span>
                         </div>
                       </div>
 
@@ -2090,7 +2965,7 @@ export default function RealEstateCalculator() {
                 <div className="flex items-center justify-between border-b border-slate-100 pb-3">
                   <h3 className="text-sm font-black text-slate-900 flex items-center gap-2">
                     <Users className="w-4 h-4 text-blue-600" />
-                    En Yüksek Hacimli Müşteri & Ortaklar
+                    En Yüksek Hacimli Müşteri & Ortaklar (Hisseli Bölüşüm)
                   </h3>
                 </div>
 
@@ -2103,7 +2978,7 @@ export default function RealEstateCalculator() {
                       </div>
                       <div className="text-right">
                         <span className="font-black text-slate-900 block">{formatMoney(c.totalGross)}</span>
-                        <span className="text-[10px] text-slate-500 font-bold">{c.count} İşlemde Yer Aldı</span>
+                        <span className="text-[10px] text-slate-500 font-bold">{c.count} İşlem</span>
                       </div>
                     </div>
                   ))}
@@ -2114,7 +2989,7 @@ export default function RealEstateCalculator() {
           </div>
         )}
 
-        {/* 3. SEKME: KİŞİ REHBERİ (CRM) */}
+        {/* 4. SEKME: KİŞİ REHBERİ (CRM) */}
         {activeTab === 'contacts' && (
           <div className="bg-white p-6 rounded-2xl shadow-sm border-t-4 border-slate-900 space-y-5">
             <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-4 border-b border-slate-100 pb-4">
@@ -2186,7 +3061,7 @@ export default function RealEstateCalculator() {
           </div>
         )}
 
-        {/* 4. SEKME: İŞLEM ARŞİVİ */}
+        {/* 5. SEKME: İŞLEM ARŞİVİ */}
         {activeTab === 'history' && (
           <div className="bg-white p-6 rounded-2xl shadow-sm border-t-4 border-slate-900 space-y-4">
             <div className="flex justify-between items-center border-b border-slate-100 pb-3">
@@ -2195,7 +3070,7 @@ export default function RealEstateCalculator() {
                   <History className="w-5 h-5 text-amber-600" />
                   İşlem Arşivi ({transactionsHistory.length})
                 </h2>
-                <p className="text-xs text-slate-500 font-medium">Detayları görmek, bordroyu yazdırmak veya hatalı/deneme işlemlerini silmek için listeyi kullanın.</p>
+                <p className="text-xs text-slate-500 font-medium">Kayıtları inceleyin, bordroyu yazdırın veya hatalı kayıtları silin.</p>
               </div>
             </div>
 
@@ -2205,8 +3080,8 @@ export default function RealEstateCalculator() {
                   <tr className="bg-slate-900 text-amber-500 font-black border-b border-slate-700">
                     <th className="p-4 rounded-tl-lg">Tarih</th>
                     <th className="p-4">Tür</th>
-                    <th className="p-4">Satıcı</th>
-                    <th className="p-4">Alıcı</th>
+                    <th className="p-4">Satıcı / Kiraya Veren</th>
+                    <th className="p-4">Alıcı / Kiracı</th>
                     <th className="p-4">İşlem Bedeli</th>
                     <th className="p-4 text-white">Brüt Gelir</th>
                     <th className="p-4 text-emerald-400">360 IC Şirket Payı</th>
@@ -2222,8 +3097,8 @@ export default function RealEstateCalculator() {
                     >
                       <td className="p-4 text-slate-600 font-bold">{new Date(row.created_at).toLocaleDateString('tr-TR')}</td>
                       <td className="p-4"><span className="px-2.5 py-1 bg-slate-200 text-slate-900 font-black rounded-md">{row.transaction_type}</span></td>
-                      <td className="p-4 font-bold text-slate-900">{row.seller_name}</td>
-                      <td className="p-4 font-bold text-slate-900">{row.buyer_name}</td>
+                      <td className="p-4 font-bold text-slate-900">{row.seller_parties?.length ? row.seller_parties.join(', ') : row.seller_name}</td>
+                      <td className="p-4 font-bold text-slate-900">{row.buyer_parties?.length ? row.buyer_parties.join(', ') : row.buyer_name}</td>
                       <td className="p-4 font-black text-slate-700">{formatMoney(Number(row.property_price))}</td>
                       <td className="p-4 font-black text-slate-900">{formatMoney(Number(row.total_transaction_gross))}</td>
                       <td className="p-4 font-black text-emerald-600 text-sm">{formatMoney(Number(row.total_office_net_income))}</td>
@@ -2237,7 +3112,6 @@ export default function RealEstateCalculator() {
                         <button 
                           onClick={(e) => { e.stopPropagation(); handleDeleteTransaction(row.id); }}
                           className="inline-flex items-center gap-1 bg-red-50 hover:bg-red-100 text-red-600 px-2.5 py-1.5 rounded-lg text-xs font-bold transition"
-                          title="İşlemi Sil"
                         >
                           <Trash2 className="w-3.5 h-3.5" /> Sil
                         </button>
@@ -2250,11 +3124,11 @@ export default function RealEstateCalculator() {
           </div>
         )}
 
-        {/* 5. SEKME: SİSTEM TANIMLARI */}
+        {/* 6. SEKME: SİSTEM TANIMLARI (Ofis Kolonu ile) */}
         {activeTab === 'settings' && (
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             
-            {/* Temsilci Kadrosu */}
+            {/* Temsilci Kadrosu & Ofis Bilgisi (Madde 6) */}
             <div className="bg-white p-6 rounded-2xl shadow-sm border-t-4 border-slate-900 space-y-5">
               <div className="flex items-center justify-between border-b border-slate-100 pb-3">
                 <div className="flex items-center gap-2">
@@ -2267,7 +3141,7 @@ export default function RealEstateCalculator() {
               {/* Yeni Temsilci Ekle */}
               <div className="p-4 bg-slate-50 rounded-xl border border-slate-200/70 space-y-3">
                 <span className="text-xs font-bold text-slate-700 block">Yeni Temsilci Tanımla</span>
-                <div className="grid grid-cols-3 gap-2">
+                <div className="grid grid-cols-2 gap-2">
                   <input
                     type="text"
                     placeholder="Kod (363)"
@@ -2282,11 +3156,20 @@ export default function RealEstateCalculator() {
                     onChange={(e) => setNewAgentName(e.target.value)}
                     className="p-2 border border-slate-300 rounded-lg text-xs font-bold"
                   />
+                </div>
+                <div className="grid grid-cols-2 gap-2">
                   <input
                     type="number"
-                    placeholder="Oran (%50)"
+                    placeholder="Hak Ediş Oranı (%50)"
                     value={newAgentRate || ''}
                     onChange={(e) => setNewAgentRate(Number(e.target.value))}
+                    className="p-2 border border-slate-300 rounded-lg text-xs font-bold"
+                  />
+                  <input
+                    type="text"
+                    placeholder="Ofis / Şube (Örn: Nilüfer Ofis)"
+                    value={newAgentOffice}
+                    onChange={(e) => setNewAgentOffice(e.target.value)}
                     className="p-2 border border-slate-300 rounded-lg text-xs font-bold"
                   />
                 </div>
@@ -2312,14 +3195,15 @@ export default function RealEstateCalculator() {
                             <span className="px-1.5 py-0.5 bg-red-100 text-red-800 text-[10px] font-black rounded">PASİF</span>
                           )}
                         </div>
-                        <span className="text-[11px] text-slate-500 font-semibold block mt-0.5">Hak Ediş Payı: %{a.commission_rate}</span>
+                        <span className="text-[11px] text-slate-500 font-semibold block mt-0.5">
+                          🏢 {a.office_name || 'Merkez Ofis'} • Hak Ediş Payı: %{a.commission_rate}
+                        </span>
                       </div>
 
                       <div className="flex items-center gap-2">
                         <button
                           onClick={() => toggleAgentActiveStatus(a)}
                           className={`px-2.5 py-1 rounded-lg font-bold text-[11px] transition flex items-center gap-1 ${isActive ? 'bg-emerald-100 text-emerald-800 hover:bg-emerald-200' : 'bg-slate-200 text-slate-700 hover:bg-slate-300'}`}
-                          title={isActive ? 'Danışmanı Pasife Al' : 'Danışmanı Aktifleştir'}
                         >
                           {isActive ? <ToggleRight className="w-4 h-4 text-emerald-600" /> : <ToggleLeft className="w-4 h-4 text-slate-500" />}
                           {isActive ? 'Aktif' : 'Pasif'}
@@ -2328,7 +3212,6 @@ export default function RealEstateCalculator() {
                         <button 
                           onClick={() => setEditingAgent(a)} 
                           className="p-1.5 text-slate-600 hover:text-slate-900 bg-white rounded-lg border border-slate-200 shadow-sm"
-                          title="Danışmanı Düzenle"
                         >
                           <Edit3 className="w-3.5 h-3.5" />
                         </button>
@@ -2336,7 +3219,6 @@ export default function RealEstateCalculator() {
                         <button 
                           onClick={() => handleDeleteAgent(a.id)} 
                           className="p-1.5 text-red-500 hover:text-red-700 bg-red-50 rounded-lg"
-                          title="Tamamen Sil"
                         >
                           <Trash2 className="w-3.5 h-3.5" />
                         </button>
@@ -2395,14 +3277,12 @@ export default function RealEstateCalculator() {
                       <button 
                         onClick={() => setEditingExpenseType(t)} 
                         className="p-1.5 text-slate-600 hover:text-slate-900 bg-white rounded-lg border border-slate-200 shadow-sm"
-                        title="Gideri Düzenle"
                       >
                         <Edit3 className="w-3.5 h-3.5" />
                       </button>
                       <button 
                         onClick={() => handleDeleteExpenseType(t.id)} 
                         className="text-red-500 hover:text-red-700 bg-red-50 p-1.5 rounded"
-                        title="Gideri Sil"
                       >
                         <Trash2 className="w-3.5 h-3.5" />
                       </button>
@@ -2414,7 +3294,8 @@ export default function RealEstateCalculator() {
           </div>
         )}
 
-        {/* TEMSİLCİ DÜZENLEME MODALI */}
+        {/* MODALLAR */}
+        {/* Temsilci Düzenleme Modalı */}
         {editingAgent && (
           <div className="fixed inset-0 bg-slate-950/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
             <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 max-w-md w-full p-6 space-y-4">
@@ -2445,6 +3326,16 @@ export default function RealEstateCalculator() {
                 </div>
 
                 <div>
+                  <label className="block font-bold text-slate-700 mb-1">Ofis / Şube</label>
+                  <input
+                    type="text"
+                    value={editingAgent.office_name || ''}
+                    onChange={(e) => setEditingAgent({ ...editingAgent, office_name: e.target.value })}
+                    className="w-full p-2.5 border rounded-lg font-bold"
+                  />
+                </div>
+
+                <div>
                   <label className="block font-bold text-slate-700 mb-1">Hak Ediş Komisyon Oranı (%)</label>
                   <input
                     type="number"
@@ -2461,8 +3352,8 @@ export default function RealEstateCalculator() {
                     onChange={(e) => setEditingAgent({ ...editingAgent, is_active: e.target.value === 'active' })}
                     className="w-full p-2.5 border rounded-lg bg-slate-50 font-bold"
                   >
-                    <option value="active">✅ Aktif (Yeni işlemlerde seçilebilir)</option>
-                    <option value="inactive">❌ Pasif (İşten ayrıldı / Yeni işlemlerde gizle)</option>
+                    <option value="active">✅ Aktif</option>
+                    <option value="inactive">❌ Pasif</option>
                   </select>
                 </div>
               </div>
@@ -2485,7 +3376,7 @@ export default function RealEstateCalculator() {
           </div>
         )}
 
-        {/* GİDER TÜRÜ DÜZENLEME MODALI */}
+        {/* Gider Düzenleme Modalı */}
         {editingExpenseType && (
           <div className="fixed inset-0 bg-slate-950/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
             <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 max-w-md w-full p-6 space-y-4">
@@ -2537,7 +3428,7 @@ export default function RealEstateCalculator() {
           </div>
         )}
 
-        {/* KİŞİ KARTI DÜZENLEME MODALI */}
+        {/* Kişi Düzenleme Modalı */}
         {editingContact && (
           <div className="fixed inset-0 bg-slate-950/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
             <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 max-w-md w-full p-6 space-y-4">
@@ -2565,7 +3456,7 @@ export default function RealEstateCalculator() {
                     className="w-full p-2.5 border rounded-lg bg-slate-50 font-bold"
                   >
                     <option value="MUSTERI">Müşteri / Danışan</option>
-                    <option value="ORTAK">Ortak Çalışma Temsilcisi</option>
+                    <option value="ORTAK">Harici Ortak Temsilcisi</option>
                   </select>
                 </div>
 
@@ -2632,7 +3523,7 @@ export default function RealEstateCalculator() {
           </div>
         )}
 
-        {/* GEÇMİŞ İŞLEM DETAY MODAL */}
+        {/* Geçmiş İşlem Detay Modalı */}
         {selectedHistoryItem && (
           <div className="fixed inset-0 bg-slate-950/70 backdrop-blur-sm z-50 flex items-center justify-center p-4 overflow-y-auto">
             <div className="bg-white rounded-3xl shadow-2xl border border-slate-300 max-w-4xl w-full max-h-[90vh] flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-200">
@@ -2654,13 +3545,7 @@ export default function RealEstateCalculator() {
                     disabled={isPdfLoading}
                     className="flex items-center gap-1.5 bg-amber-600 hover:bg-amber-700 text-white px-3 py-1.5 rounded-xl font-bold text-xs shadow transition"
                   >
-                    <Download className="w-3.5 h-3.5" /> PDF / Yazdır
-                  </button>
-                  <button
-                    onClick={() => loadHistoryItemToCalculator(selectedHistoryItem)}
-                    className="flex items-center gap-1.5 bg-slate-800 hover:bg-slate-700 text-amber-400 px-3 py-1.5 rounded-xl font-bold text-xs border border-slate-700 transition"
-                  >
-                    <ExternalLink className="w-3.5 h-3.5" /> Düzenle
+                    <Download className="w-3.5 h-3.5" /> 1 Sayfa PDF
                   </button>
                   <button
                     onClick={() => handleDeleteTransaction(selectedHistoryItem.id)}
@@ -2682,7 +3567,7 @@ export default function RealEstateCalculator() {
                   
                   <div className="flex justify-between items-end border-b-2 border-slate-900 pb-3">
                     <div>
-                      <span className="text-xs font-black text-amber-600 uppercase">360 IC - Investor Community</span>
+                      <span className="text-xs font-black text-amber-600 uppercase">360 IC - INVESTOR COMMUNITY</span>
                       <h4 className="text-xl font-black text-slate-900">İŞLEM VE HAK EDİŞ BORDROSU</h4>
                       <p className="text-xs text-slate-500 font-bold">İşlem Tarihi: {new Date(selectedHistoryItem.created_at).toLocaleDateString('tr-TR')}</p>
                     </div>
@@ -2696,10 +3581,10 @@ export default function RealEstateCalculator() {
                     {/* Satıcı */}
                     <div className="p-4 bg-slate-50 rounded-xl border border-slate-200 space-y-1.5 text-xs">
                       <div className="font-black text-slate-900 border-b pb-1 flex justify-between">
-                        <span className="text-amber-600">Satıcı Tarafı</span>
+                        <span className="text-amber-600">{selectedHistoryItem.transaction_type === 'KİRALAMA' ? 'Kiraya Veren Tarafı' : 'Satıcı Tarafı'}</span>
                         <span className="text-slate-500">Danışman: {agents.find(a => a.id === selectedHistoryItem.seller_agent_id)?.full_name || 'Belirtilmedi'}</span>
                       </div>
-                      <div className="flex justify-between"><span>Müşteri:</span><b>{selectedHistoryItem.seller_name}</b></div>
+                      <div className="flex justify-between"><span>Müşteri(ler):</span><b>{selectedHistoryItem.seller_parties?.length ? selectedHistoryItem.seller_parties.join(', ') : selectedHistoryItem.seller_name}</b></div>
                       <div className="flex justify-between"><span>Komisyon Matrahı:</span><b>{formatMoney(Number(selectedHistoryItem.seller_base_commission))}</b></div>
                       <div className="flex justify-between"><span>Fatura KDV:</span><b>{formatMoney(Number(selectedHistoryItem.seller_tax_amount))}</b></div>
                       {Number(selectedHistoryItem.seller_tax_deduction) > 0 && (
@@ -2708,12 +3593,6 @@ export default function RealEstateCalculator() {
                       {selectedHistoryItem.seller_has_partnership && (
                         <div className="flex justify-between text-red-600"><span>Ortak Payı ({selectedHistoryItem.seller_partner_name}):</span><b>- {formatMoney(Number(selectedHistoryItem.seller_partner_share))}</b></div>
                       )}
-                      {selectedItemExpenses.filter(e => e.side === 'SELLER').map((e, idx) => (
-                        <div key={idx} className="flex justify-between text-[11px] text-slate-500 pl-2">
-                          <span>• {e.custom_description}:</span>
-                          <span>- {formatMoney(Number(e.amount))}</span>
-                        </div>
-                      ))}
                       <div className="flex justify-between text-amber-700 font-black pt-1.5 border-t text-sm">
                         <span>Danışman Net Hak Ediş:</span>
                         <span>{formatMoney(Number(selectedHistoryItem.seller_agent_net_earning))}</span>
@@ -2723,10 +3602,10 @@ export default function RealEstateCalculator() {
                     {/* Alıcı */}
                     <div className="p-4 bg-slate-50 rounded-xl border border-slate-200 space-y-1.5 text-xs">
                       <div className="font-black text-slate-900 border-b pb-1 flex justify-between">
-                        <span className="text-emerald-600">Alıcı Tarafı</span>
+                        <span className="text-emerald-600">{selectedHistoryItem.transaction_type === 'KİRALAMA' ? 'Kiralayan Tarafı' : 'Alıcı Tarafı'}</span>
                         <span className="text-slate-500">Danışman: {agents.find(a => a.id === selectedHistoryItem.buyer_agent_id)?.full_name || 'Belirtilmedi'}</span>
                       </div>
-                      <div className="flex justify-between"><span>Müşteri:</span><b>{selectedHistoryItem.buyer_name}</b></div>
+                      <div className="flex justify-between"><span>Müşteri(ler):</span><b>{selectedHistoryItem.buyer_parties?.length ? selectedHistoryItem.buyer_parties.join(', ') : selectedHistoryItem.buyer_name}</b></div>
                       <div className="flex justify-between"><span>Komisyon Matrahı:</span><b>{formatMoney(Number(selectedHistoryItem.buyer_base_commission))}</b></div>
                       <div className="flex justify-between"><span>Fatura KDV:</span><b>{formatMoney(Number(selectedHistoryItem.buyer_tax_amount))}</b></div>
                       {Number(selectedHistoryItem.buyer_tax_deduction) > 0 && (
@@ -2735,12 +3614,6 @@ export default function RealEstateCalculator() {
                       {selectedHistoryItem.buyer_has_partnership && (
                         <div className="flex justify-between text-red-600"><span>Ortak Payı ({selectedHistoryItem.buyer_partner_name}):</span><b>- {formatMoney(Number(selectedHistoryItem.buyer_partner_share))}</b></div>
                       )}
-                      {selectedItemExpenses.filter(e => e.side === 'BUYER').map((e, idx) => (
-                        <div key={idx} className="flex justify-between text-[11px] text-slate-500 pl-2">
-                          <span>• {e.custom_description}:</span>
-                          <span>- {formatMoney(Number(e.amount))}</span>
-                        </div>
-                      ))}
                       <div className="flex justify-between text-emerald-700 font-black pt-1.5 border-t text-sm">
                         <span>Danışman Net Hak Ediş:</span>
                         <span>{formatMoney(Number(selectedHistoryItem.buyer_agent_net_earning))}</span>
